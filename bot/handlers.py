@@ -62,7 +62,7 @@ def handle_audio(update: Update, context: CallbackContext) -> None:
 def handle_text(update: Update, context: CallbackContext) -> None:
     from .settings_handler import ENABLE_REWRITING, ENABLE_SUMMARIZATION
     message = update.message.text
-    logger.info(f"Отримано текстове повідомлення: {message}")
+    # logger.info(f"Отримано текстове повідомлення: {message}")
     
     if ENABLE_REWRITING and "перепиши" in message.lower():
         rewrite = rewrite_text(message)
