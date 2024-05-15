@@ -124,26 +124,11 @@ def handle_text(update: Update, context: CallbackContext) -> None:
             if ENABLE_REWRITING and "перепиши" in message.lower():
                 rewrite = rewrite_text(original_message)
                 update.message.reply_text(f'Переписаний текст:\n`\n{rewrite}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
-            elif ENABLE_SUMMARIZATION and "зроби резюме" in message.lower():
+            elif ENABLE_SUMMARIZATION and "резюме" in message.lower():
                 summary = summarize_text(original_message)
                 update.message.reply_text(f'Резюме:\n`\n{summary}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
-            else:
-                response = process_command(original_message, message)
-                if response:
-                    logger.info("Переписування текстового повідомлення")
-                    update.message.reply_text(response, reply_to_message_id=update.message.message_id, parse_mode='Markdown')
+            elif ENABLE_POSTPROCESSING and "постобробка" in message.lower():
+                postprocess = postprocess_text(original_message)
+                update.message.reply_text(f'Резюме:\n`\n{postprocess}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
         else:
             update.message.reply_text("Надішліть це повідомлення у відповідь на те, яке потрібно обробити.")
-    else:
-        logger.info("Команда не починається зі слова 'бот'. Ігноруємо.")
-
-def process_command(transcription: str, message: str) -> str:
-    from .settings_handler import ENABLE_SUMMARIZATION, ENABLE_REWRITING, ENABLE_POSTPROCESSING
-
-    if ENABLE_SUMMARIZATION and "бот зроби резюме" in message:
-        return f'Резюме:\n`\n{summarize_text(transcription)}\n`'
-    elif ENABLE_REWRITING and "бот перепиши" in message:
-        return f'Переписаний текст:\n`\n{rewrite_text(transcription)}\n`'
-    elif ENABLE_POSTPROCESSING and "бот постобробка" in message:
-        return f'Постоброблений текст:\n`\n{postprocess_text(transcription)}\n`'
-    return ''
