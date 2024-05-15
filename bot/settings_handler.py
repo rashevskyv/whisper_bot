@@ -8,10 +8,12 @@ logger = logging.getLogger(__name__)
 ENABLE_POSTPROCESSING = False
 ENABLE_SUMMARIZATION = True
 ENABLE_REWRITING = True
+ENABLE_VIDEO_PROCESSING = False
+ENABLE_VIDEO_NOTE_PROCESSING = True
 LANGUAGE = 'uk'
 
 def settings_menu(update: Update, context: CallbackContext) -> None:
-    global ENABLE_POSTPROCESSING, ENABLE_SUMMARIZATION, ENABLE_REWRITING, LANGUAGE
+    global ENABLE_POSTPROCESSING, ENABLE_SUMMARIZATION, ENABLE_REWRITING, ENABLE_VIDEO_PROCESSING, ENABLE_VIDEO_NOTE_PROCESSING, LANGUAGE
     logger.info(f"Відображення меню налаштувань. ENABLE_POSTPROCESSING: {ENABLE_POSTPROCESSING}")
     keyboard = [
         [InlineKeyboardButton(
@@ -23,6 +25,12 @@ def settings_menu(update: Update, context: CallbackContext) -> None:
         [InlineKeyboardButton(
             "Переписування: вимкнути" if ENABLE_REWRITING else "Переписування: увімкнути",
             callback_data='toggle_rewriting')],
+        [InlineKeyboardButton(
+            "Обробка відео: вимкнути" if ENABLE_VIDEO_PROCESSING else "Обробка відео: увімкнути",
+            callback_data='toggle_video_processing')],
+        [InlineKeyboardButton(
+            "Обробка відеоповідомлень: вимкнути" if ENABLE_VIDEO_NOTE_PROCESSING else "Обробка відеоповідомлень: увімкнути",
+            callback_data='toggle_video_note_processing')],
         [InlineKeyboardButton(
             "Мова: Українська" if LANGUAGE == 'uk' else "Мова: Англійська" if LANGUAGE == 'en' else "Мова: Російська",
             callback_data='change_language')]
@@ -50,6 +58,18 @@ def toggle_rewriting(update: Update, context: CallbackContext) -> None:
     global ENABLE_REWRITING
     ENABLE_REWRITING = not ENABLE_REWRITING
     logger.info(f"Переписування {'увімкнене' if ENABLE_REWRITING else 'вимкнене'}")
+    settings_menu(update, context)
+
+def toggle_video_processing(update: Update, context: CallbackContext) -> None:
+    global ENABLE_VIDEO_PROCESSING
+    ENABLE_VIDEO_PROCESSING = not ENABLE_VIDEO_PROCESSING
+    logger.info(f"Обробка відео {'увімкнена' if ENABLE_VIDEO_PROCESSING else 'вимкнена'}")
+    settings_menu(update, context)
+
+def toggle_video_note_processing(update: Update, context: CallbackContext) -> None:
+    global ENABLE_VIDEO_NOTE_PROCESSING
+    ENABLE_VIDEO_NOTE_PROCESSING = not ENABLE_VIDEO_NOTE_PROCESSING
+    logger.info(f"Обробка відеоповідомлень {'увімкнена' if ENABLE_VIDEO_NOTE_PROCESSING else 'вимкнена'}")
     settings_menu(update, context)
 
 def change_language(update: Update, context: CallbackContext) -> None:

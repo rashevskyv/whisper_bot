@@ -1,6 +1,6 @@
 import logging
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
-from bot.handlers import start, handle_audio, handle_video, handle_video_note, settings_menu, toggle_postprocessing, change_language, handle_text, toggle_rewriting, toggle_summarization
+from bot.handlers import start, handle_audio, handle_video, handle_video_note, settings_menu, toggle_postprocessing, change_language, handle_text, toggle_rewriting, toggle_summarization, toggle_video_note_processing, toggle_video_processing
 from bot.settings import error
 from tokens import TOKEN
 
@@ -20,6 +20,8 @@ def main() -> None:
     dispatcher.add_handler(CallbackQueryHandler(toggle_postprocessing, pattern='toggle_postprocessing'))
     dispatcher.add_handler(CallbackQueryHandler(toggle_summarization, pattern='toggle_summarization'))
     dispatcher.add_handler(CallbackQueryHandler(toggle_rewriting, pattern='toggle_rewriting'))
+    dispatcher.add_handler(CallbackQueryHandler(toggle_video_processing, pattern='toggle_video_processing'))
+    dispatcher.add_handler(CallbackQueryHandler(toggle_video_note_processing, pattern='toggle_video_note_processing'))
     dispatcher.add_handler(CallbackQueryHandler(change_language, pattern='change_language'))
     dispatcher.add_handler(MessageHandler(Filters.text & Filters.regex('^Меню налаштувань$'), settings_menu))
     dispatcher.add_handler(MessageHandler(Filters.audio | Filters.voice, handle_audio))
