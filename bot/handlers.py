@@ -5,6 +5,7 @@ from telegram.ext import CallbackContext, CallbackQueryHandler, CommandHandler, 
 from .transcription import transcribe_audio, postprocess_text, summarize_text, rewrite_text
 from .settings_handler import settings_menu, toggle_postprocessing, toggle_summarization, toggle_rewriting, change_language, LANGUAGE
 import time
+from moviepy.editor import VideoFileClip
 
 # Налаштування логування
 logger = logging.getLogger(__name__)
@@ -33,43 +34,83 @@ def delete_old_files(current_file_path, directory, max_age_minutes=10):
                 logger.info(f"Видалено старий файл: {file_path}")
     os.remove(current_file_path)
 
-def handle_audio(update: Update, context: CallbackContext) -> None:
+def handle_audio(update: Update, context: CallbackContext, audio_path: str = None) -> None:
     from .settings_handler import ENABLE_POSTPROCESSING
     logger.info("Отримано аудіофайл від користувача")
-    audio_file = update.message.audio or update.message.voice
-    file = context.bot.getFile(audio_file.file_id)
-    temp_dir = os.path.join(os.getcwd(), 'temp')
-    os.makedirs(temp_dir, exist_ok=True)
-    file_path = os.path.join(temp_dir, f'{audio_file.file_id}.ogg')
-    file.download(file_path)
-    logger.info(f"Файл завантажено для обробки: {file_path}")
+    
+    if not audio_path:
+        audio_file = update.message.audio or update.message.voice
+        file = context.bot.getFile(audio_file.file_id)
+        temp_dir = os.path.join(os.getcwd(), 'temp')
+        os.makedirs(temp_dir, exist_ok=True)
+        audio_path = os.path.join(temp_dir, f'{audio_file.file_id}.ogg')
+        file.download(audio_path)
 
-    transcription = transcribe_audio(file_path, LANGUAGE)
+    transcription = transcribe_audio(audio_path, LANGUAGE)
     
     if ENABLE_POSTPROCESSING:
-        output_text = f'Розшифровка аудіо (постобробка):\n```\n{postprocess_text(transcription)}\n```'
+        postprocessed_text = postprocess_text(transcription)
+        output_text = f'`\n{postprocessed_text}\n`'
     else:
-        output_text = f'Розшифровка аудіо:\n```\n{transcription}\n```'
-    
+        output_text = f'Розшифровка аудіо:\n`\n{transcription}\n`'
+
     update.message.reply_text(output_text, parse_mode='Markdown')
 
     if "зроби резюме" in transcription.lower():
         summary = summarize_text(transcription)
-        update.message.reply_text(f'Резюме:\n```\n{summary}\n```', parse_mode='Markdown')
+        update.message.reply_text(f'Резюме:\n`\n{summary}\n`', parse_mode='Markdown')
 
-    delete_old_files(file_path, temp_dir)
+    delete_old_files(audio_path, temp_dir)
+
+
+def extract_audio_from_video(video_path: str, audio_path: str) -> None:
+    video = VideoFileClip(video_path)
+    video.audio.write_audiofile(audio_path)
+
+def handle_video(update: Update, context: CallbackContext) -> None:
+    logger.info("Отримано відеофайл від користувача")
+    video_file = update.message.video
+    file = context.bot.getFile(video_file.file_id)
+    temp_dir = os.path.join(os.getcwd(), 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    video_path = os.path.join(temp_dir, f'{video_file.file_id}.mp4')
+    audio_path = os.path.join(temp_dir, f'{video_file.file_id}.ogg')
+    file.download(video_path)
+
+    extract_audio_from_video(video_path, audio_path)
+    audio_update = update  # Зберігаємо оригінальний update для handle_audio
+    handle_audio(audio_update, context, audio_path)
+
+    delete_old_files(video_path, temp_dir)
+    delete_old_files(audio_path, temp_dir)
+
+def handle_video_note(update: Update, context: CallbackContext) -> None:
+    logger.info("Отримано відеоповідомлення від користувача")
+    video_note = update.message.video_note
+    file = context.bot.getFile(video_note.file_id)
+    temp_dir = os.path.join(os.getcwd(), 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    video_note_path = os.path.join(temp_dir, f'{video_note.file_id}.mp4')
+    audio_path = os.path.join(temp_dir, f'{video_note.file_id}.ogg')
+    file.download(video_note_path)
+
+    extract_audio_from_video(video_note_path, audio_path)
+    audio_update = update  # Зберігаємо оригінальний update для handle_audio
+    handle_audio(audio_update, context, audio_path)
+
+    delete_old_files(video_note_path, temp_dir)
+    delete_old_files(audio_path, temp_dir)
 
 def handle_text(update: Update, context: CallbackContext) -> None:
     from .settings_handler import ENABLE_REWRITING, ENABLE_SUMMARIZATION
     message = update.message.text
-    # logger.info(f"Отримано текстове повідомлення: {message}")
     
     if ENABLE_REWRITING and "перепиши" in message.lower():
         rewrite = rewrite_text(message)
-        update.message.reply_text(f'Переписаний текст:\n```\n{rewrite}\n```', parse_mode='Markdown')
+        update.message.reply_text(f'Переписаний текст:\n`\n{rewrite}\n`', parse_mode='Markdown')
     elif ENABLE_SUMMARIZATION and "зроби резюме" in message.lower():
         summary = summarize_text(message)
-        update.message.reply_text(f'Резюме:\n```\n{summary}\n```', parse_mode='Markdown')
+        update.message.reply_text(f'Резюме:\n`\n{summary}\n`', parse_mode='Markdown')
     elif update.message.reply_to_message:
         original_message = update.message.reply_to_message.text
         response = process_command(original_message, message)
@@ -81,9 +122,9 @@ def process_command(transcription: str, message: str) -> str:
     from .settings_handler import ENABLE_SUMMARIZATION, ENABLE_REWRITING, ENABLE_POSTPROCESSING
 
     if ENABLE_SUMMARIZATION and ("бот зроби резюме" in message or "бот резюме" in message):
-        return f'Резюме:\n```\n{summarize_text(transcription)}\n```'
+        return f'Резюме:\n`\n{summarize_text(transcription)}\n`'
     elif ENABLE_REWRITING and "бот перепиши" in message:
-        return f'Переписаний текст:\n```\n{rewrite_text(transcription)}\n```'
+        return f'Переписаний текст:\n`\n{rewrite_text(transcription)}\n`'
     elif ENABLE_POSTPROCESSING and "бот постобробка" in message:
-        return f'Постоброблений текст:\n```\n{postprocess_text(transcription)}\n```'
+        return f'Постоброблений текст:\n`\n{postprocess_text(transcription)}\n`'
     return ''
