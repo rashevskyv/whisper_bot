@@ -6,6 +6,7 @@ from telegram.ext import CallbackContext, CallbackQueryHandler, CommandHandler, 
 from .transcription import transcribe_audio, postprocess_text, summarize_text, rewrite_text, query_gpt4_stream, query_claude_stream, analyze_image, analyze_content
 from .settings_handler import settings_menu, get_user_settings
 from moviepy.editor import VideoFileClip
+from .context_manager import context_manager
 
 # Налаштування логування
 logger = logging.getLogger(__name__)
@@ -36,10 +37,10 @@ def cleanup_temp_files(*file_paths):
 def start(update: Update, context: CallbackContext) -> None:
     logger.info("Команда /start отримана")
     keyboard = [
-        [KeyboardButton("Меню налаштувань")]
+        [KeyboardButton("Меню")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    update.message.reply_text('Вітаю! Надішліть мені аудіофайл, і я розшифрую його в текст. Або почніть повідомлення зі слова "бот", щоб спілкуватися з AI.', reply_markup=reply_markup)
+    update.message.reply_text('Вітаю! Надішліть мені аудіофайл, і я розшифрую його в текст. Або почніть повідомлення зі слова "бот", щоб спілкуватися з AI. Для налаштувань натисніть кнопку "Меню".', reply_markup=reply_markup)
 
 def handle_audio(update: Update, context: CallbackContext, audio_path: str = None) -> None:
     user_id = update.effective_user.id
@@ -134,6 +135,33 @@ def handle_video_note(update: Update, context: CallbackContext) -> None:
     finally:
         cleanup_temp_files(video_note_path, audio_path)
 
+import os
+import logging
+from telegram import Update
+from telegram.ext import CallbackContext
+from .transcription import transcribe_audio, postprocess_text, summarize_text, rewrite_text, analyze_content
+from .settings_handler import get_user_settings
+from .context_manager import context_manager
+
+logger = logging.getLogger(__name__)
+
+temp_dir = os.path.join(os.getcwd(), 'temp')
+os.makedirs(temp_dir, exist_ok=True)
+
+def cleanup_temp_files(*file_paths):
+    for file_path in file_paths:
+        for attempt in range(3):
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info(f"Успішно видалено файл: {file_path}")
+                break
+            except Exception as e:
+                logger.warning(f"Спроба {attempt + 1} видалити файл {file_path} не вдалася: {e}")
+                time.sleep(1)
+        else:
+            logger.error(f"Не вдалося видалити файл {file_path} після кількох спроб")
+
 def handle_message(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
@@ -145,6 +173,13 @@ def handle_message(update: Update, context: CallbackContext) -> None:
 
     chat_type = message.chat.type
     logger.debug(f"Отримано повідомлення типу: {chat_type}")
+
+    text = message.text or message.caption
+    logger.debug(f"Текст повідомлення: {text}")
+
+    if text == "Меню":
+        settings_menu(update, context)
+        return
 
     # Обробка аудіо повідомлень
     if message.voice or message.audio:
@@ -192,7 +227,6 @@ def handle_message(update: Update, context: CallbackContext) -> None:
             image_file.download(image_path)
             logger.debug(f"Зображення завантажено: {image_path}")
         
-        # Перевірка наявності тексту або зображення
         if not text and not image_path:
             update.message.reply_text("Будь ласка, надайте текст або зображення для аналізу.")
             return
@@ -201,7 +235,18 @@ def handle_message(update: Update, context: CallbackContext) -> None:
         
         try:
             full_response = ""
-            for chunk in analyze_content(text, image_path):
+            
+            # Отримуємо контекст, якщо він увімкнений
+            if user_settings['ENABLE_CONTEXT']:
+                conversation_context = context_manager.get_context(user_id)
+            else:
+                conversation_context = []
+            
+            # Додаємо поточне повідомлення до контексту
+            if user_settings['ENABLE_CONTEXT']:
+                context_manager.add_message(user_id, 'user', text)
+            
+            for chunk in analyze_content(text, image_path, conversation_context):
                 full_response += chunk
                 if len(full_response) % 100 == 0:
                     try:
@@ -213,6 +258,10 @@ def handle_message(update: Update, context: CallbackContext) -> None:
                         )
                     except Exception as e:
                         logger.error(f"Помилка при оновленні повідомлення: {e}")
+            
+            # Додаємо відповідь бота до контексту
+            if user_settings['ENABLE_CONTEXT']:
+                context_manager.add_message(user_id, 'assistant', full_response)
             
             try:
                 context.bot.edit_message_text(
@@ -226,7 +275,7 @@ def handle_message(update: Update, context: CallbackContext) -> None:
         finally:
             if image_path:
                 cleanup_temp_files(image_path)
-    
+
     elif update.message.reply_to_message and text:
         original_message = update.message.reply_to_message.text
 

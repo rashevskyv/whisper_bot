@@ -252,8 +252,8 @@ def analyze_image(image_path: str, prompt: str):
         logger.error(f"Помилка при аналізі зображення: {str(e)}")
         yield f"Виникла помилка при аналізі зображення: {str(e)}"
 
-def analyze_content(text: str = None, image_path: str = None):
-    logger.info(f"Аналіз контенту: текст {'присутній' if text else 'відсутній'}, зображення {'присутнє' if image_path else 'відсутнє'}")
+def analyze_content(text: str = None, image_path: str = None, conversation_context: list = None):
+    logger.info(f"Аналіз контенту: текст {'присутній' if text else 'відсутній'}, зображення {'присутнє' if image_path else 'відсутнє'}, контекст {'присутній' if conversation_context else 'відсутній'}")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
@@ -262,6 +262,10 @@ def analyze_content(text: str = None, image_path: str = None):
 
     try:
         messages = [{"role": "system", "content": "Ви - помічник, здатний аналізувати текст та зображення."}]
+
+        # Додаємо контекст розмови, якщо він є
+        if conversation_context:
+            messages.extend(conversation_context)
 
         if text:
             messages.append({"role": "user", "content": text})
@@ -282,8 +286,8 @@ def analyze_content(text: str = None, image_path: str = None):
                 ]
             })
 
-        if not text and not image_path:
-            raise ValueError("Потрібно надати текст або зображення для аналізу")
+        if not text and not image_path and not conversation_context:
+            raise ValueError("Потрібно надати текст, зображення або контекст для аналізу")
 
         data = {
             'model': 'gpt-4o',
