@@ -2,6 +2,7 @@ import logging
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 from bot.handlers import start, handle_audio, handle_video, handle_video_note, settings_menu, toggle_postprocessing, change_language, handle_text, toggle_rewriting, toggle_summarization, toggle_video_note_processing, toggle_video_processing
 from bot.settings import error
+from bot.settings_handler import toggle_ai
 from tokens import TOKEN
 
 # Налаштування логування
@@ -23,11 +24,12 @@ def main() -> None:
     dispatcher.add_handler(CallbackQueryHandler(toggle_video_processing, pattern='toggle_video_processing'))
     dispatcher.add_handler(CallbackQueryHandler(toggle_video_note_processing, pattern='toggle_video_note_processing'))
     dispatcher.add_handler(CallbackQueryHandler(change_language, pattern='change_language'))
+    dispatcher.add_handler(CallbackQueryHandler(toggle_ai, pattern='toggle_ai'))  # Новий обробник
     dispatcher.add_handler(MessageHandler(Filters.text & Filters.regex('^Меню налаштувань$'), settings_menu))
     dispatcher.add_handler(MessageHandler(Filters.audio | Filters.voice, handle_audio))
     dispatcher.add_handler(MessageHandler(Filters.video, handle_video))
     dispatcher.add_handler(MessageHandler(Filters.video_note, handle_video_note))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))  # Додаємо хендлер для тексту
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
 
     dispatcher.add_error_handler(error)
 

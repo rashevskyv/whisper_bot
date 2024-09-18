@@ -2,20 +2,13 @@ import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import CallbackContext, CallbackQueryHandler, CommandHandler, MessageHandler, Filters
-from .transcription import transcribe_audio, postprocess_text, summarize_text, rewrite_text
-from .settings_handler import settings_menu, toggle_postprocessing, toggle_summarization, toggle_rewriting, change_language, toggle_video_processing, toggle_video_note_processing, LANGUAGE
+from .transcription import transcribe_audio, postprocess_text, summarize_text, rewrite_text, query_gpt4_stream, query_claude_stream
+from .settings_handler import settings_menu, toggle_postprocessing, toggle_summarization, toggle_rewriting, change_language, toggle_video_processing, toggle_video_note_processing, LANGUAGE, USE_GPT4, toggle_ai
 import time
 from moviepy.editor import VideoFileClip
 
 # Налаштування логування
 logger = logging.getLogger(__name__)
-
-ENABLE_POSTPROCESSING = False
-ENABLE_SUMMARIZATION = True
-ENABLE_REWRITING = True
-ENABLE_VIDEO_PROCESSING = True
-ENABLE_VIDEO_NOTE_PROCESSING = True
-LANGUAGE = 'uk'
 
 def start(update: Update, context: CallbackContext) -> None:
     logger.info("Команда /start отримана")
@@ -23,7 +16,7 @@ def start(update: Update, context: CallbackContext) -> None:
         [KeyboardButton("Меню налаштувань")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    update.message.reply_text('Вітаю! Надішліть мені аудіофайл, і я розшифрую його в текст.', reply_markup=reply_markup)
+    update.message.reply_text('Вітаю! Надішліть мені аудіофайл, і я розшифрую його в текст. Або почніть повідомлення зі слова "бот", щоб спілкуватися з AI.', reply_markup=reply_markup)
 
 def delete_old_files(current_file_path, directory, max_age_minutes=10):
     current_time = time.time()
@@ -114,21 +107,56 @@ def handle_video_note(update: Update, context: CallbackContext) -> None:
     delete_old_files(audio_path, temp_dir)
 
 def handle_text(update: Update, context: CallbackContext) -> None:
-    from .settings_handler import ENABLE_REWRITING, ENABLE_SUMMARIZATION
+    from .settings_handler import ENABLE_REWRITING, ENABLE_SUMMARIZATION, ENABLE_POSTPROCESSING, USE_GPT4
     message = update.message.text
 
     if message.lower().startswith("бот"):
-        if update.message.reply_to_message:
-            original_message = update.message.reply_to_message.text
-
-            if ENABLE_REWRITING and "перепиши" in message.lower():
-                rewrite = rewrite_text(original_message)
-                update.message.reply_text(f'Переписаний текст:\n`\n{rewrite}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
-            elif ENABLE_SUMMARIZATION and "резюме" in message.lower():
-                summary = summarize_text(original_message)
-                update.message.reply_text(f'Резюме:\n`\n{summary}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
-            elif ENABLE_POSTPROCESSING and "постобробка" in message.lower():
-                postprocess = postprocess_text(original_message)
-                update.message.reply_text(f'Резюме:\n`\n{postprocess}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
+        query = message[3:].strip()  # Видаляємо "бот" та пробіли з початку запиту
+        if USE_GPT4:
+            stream = query_gpt4_stream(query)
         else:
-            update.message.reply_text("Надішліть це повідомлення у відповідь на те, яке потрібно обробити.")
+            stream = query_claude_stream(query)
+        
+        # Відправляємо початкове повідомлення
+        bot_message = update.message.reply_text("Генерую відповідь...", parse_mode='Markdown')
+        full_response = ""
+        
+        # Оновлюємо повідомлення по мірі отримання нових частин відповіді
+        for chunk in stream:
+            full_response += chunk
+            if len(full_response) % 100 == 0:  # Оновлюємо кожні 100 символів
+                try:
+                    context.bot.edit_message_text(
+                        chat_id=update.effective_chat.id,
+                        message_id=bot_message.message_id,
+                        text=full_response,
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Помилка при оновленні повідомлення: {e}")
+        
+        # Відправляємо фінальне повідомлення
+        try:
+            context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=bot_message.message_id,
+                text=full_response,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Помилка при відправці фінального повідомлення: {e}")
+    
+    elif update.message.reply_to_message:
+        original_message = update.message.reply_to_message.text
+
+        if ENABLE_REWRITING and "перепиши" in message.lower():
+            rewrite = rewrite_text(original_message)
+            update.message.reply_text(f'Переписаний текст:\n`\n{rewrite}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
+        elif ENABLE_SUMMARIZATION and "резюме" in message.lower():
+            summary = summarize_text(original_message)
+            update.message.reply_text(f'Резюме:\n`\n{summary}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
+        elif ENABLE_POSTPROCESSING and "постобробка" in message.lower():
+            postprocess = postprocess_text(original_message)
+            update.message.reply_text(f'Оброблений текст:\n`\n{postprocess}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
+    else:
+        update.message.reply_text("Для запиту до AI, почніть повідомлення зі слова 'бот'. Для інших функцій, надішліть це повідомлення у відповідь на те, яке потрібно обробити.")

@@ -11,9 +11,10 @@ ENABLE_REWRITING = True
 ENABLE_VIDEO_PROCESSING = False
 ENABLE_VIDEO_NOTE_PROCESSING = True
 LANGUAGE = 'uk'
+USE_GPT4 = True  # Нова змінна для вибору між GPT-4 і Claude
 
 def settings_menu(update: Update, context: CallbackContext) -> None:
-    global ENABLE_POSTPROCESSING, ENABLE_SUMMARIZATION, ENABLE_REWRITING, ENABLE_VIDEO_PROCESSING, ENABLE_VIDEO_NOTE_PROCESSING, LANGUAGE
+    global ENABLE_POSTPROCESSING, ENABLE_SUMMARIZATION, ENABLE_REWRITING, ENABLE_VIDEO_PROCESSING, ENABLE_VIDEO_NOTE_PROCESSING, LANGUAGE, USE_GPT4
     logger.info(f"Відображення меню налаштувань. ENABLE_POSTPROCESSING: {ENABLE_POSTPROCESSING}")
     keyboard = [
         [InlineKeyboardButton(
@@ -33,7 +34,10 @@ def settings_menu(update: Update, context: CallbackContext) -> None:
             callback_data='toggle_video_note_processing')],
         [InlineKeyboardButton(
             "Мова: Українська" if LANGUAGE == 'uk' else "Мова: Англійська" if LANGUAGE == 'en' else "Мова: Російська",
-            callback_data='change_language')]
+            callback_data='change_language')],
+        [InlineKeyboardButton(
+            "AI: GPT-4" if USE_GPT4 else "AI: Claude",
+            callback_data='toggle_ai')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     if update.callback_query:
@@ -81,4 +85,10 @@ def change_language(update: Update, context: CallbackContext) -> None:
     else:
         LANGUAGE = 'uk'
     logger.info(f"Мова змінена на {LANGUAGE}")
+    settings_menu(update, context)
+
+def toggle_ai(update: Update, context: CallbackContext) -> None:
+    global USE_GPT4
+    USE_GPT4 = not USE_GPT4
+    logger.info(f"AI змінено на {'GPT-4' if USE_GPT4 else 'Claude'}")
     settings_menu(update, context)
