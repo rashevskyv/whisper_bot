@@ -4,7 +4,7 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import CallbackContext, CallbackQueryHandler, CommandHandler, MessageHandler, Filters
 from .transcription import transcribe_audio, postprocess_text, summarize_text, rewrite_text, query_gpt4_stream, query_claude_stream, analyze_image, analyze_content
-from .settings_handler import settings_menu, toggle_postprocessing, toggle_summarization, toggle_rewriting, change_language, toggle_video_processing, toggle_video_note_processing, LANGUAGE, USE_GPT4, toggle_ai
+from .settings_handler import settings_menu, get_user_settings
 from moviepy.editor import VideoFileClip
 
 # Налаштування логування
@@ -42,7 +42,8 @@ def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text('Вітаю! Надішліть мені аудіофайл, і я розшифрую його в текст. Або почніть повідомлення зі слова "бот", щоб спілкуватися з AI.', reply_markup=reply_markup)
 
 def handle_audio(update: Update, context: CallbackContext, audio_path: str = None) -> None:
-    from .settings_handler import ENABLE_POSTPROCESSING
+    user_id = update.effective_user.id
+    user_settings = get_user_settings(context, user_id)
     logger.info("Отримано аудіофайл від користувача")
     
     if not audio_path:
@@ -53,9 +54,9 @@ def handle_audio(update: Update, context: CallbackContext, audio_path: str = Non
         logger.info(f"Файл завантажено для обробки: {audio_path}")
 
     try:
-        transcription = transcribe_audio(audio_path, LANGUAGE)
+        transcription = transcribe_audio(audio_path, user_settings['LANGUAGE'])
         
-        if ENABLE_POSTPROCESSING:
+        if user_settings['ENABLE_POSTPROCESSING']:
             postprocessed_text = postprocess_text(transcription)
             output_text = f'`\n{postprocessed_text}\n`'
         else:
@@ -75,8 +76,9 @@ def extract_audio_from_video(video_path: str, audio_path: str) -> None:
     video.close()
 
 def handle_video(update: Update, context: CallbackContext) -> None:
-    from .settings_handler import ENABLE_VIDEO_PROCESSING
-    if not ENABLE_VIDEO_PROCESSING:
+    user_id = update.effective_user.id
+    user_settings = get_user_settings(context, user_id)
+    if not user_settings['ENABLE_VIDEO_PROCESSING']:
         logger.info("Обробка відео вимкнена")
         return
 
@@ -94,8 +96,9 @@ def handle_video(update: Update, context: CallbackContext) -> None:
         cleanup_temp_files(video_path, audio_path)
 
 def handle_video_note(update: Update, context: CallbackContext) -> None:
-    from .settings_handler import ENABLE_VIDEO_NOTE_PROCESSING
-    if not ENABLE_VIDEO_NOTE_PROCESSING:
+    user_id = update.effective_user.id
+    user_settings = get_user_settings(context, user_id)
+    if not user_settings['ENABLE_VIDEO_NOTE_PROCESSING']:
         logger.info("Обробка відеоповідомлень вимкнена")
         return
 
@@ -132,6 +135,8 @@ def handle_video_note(update: Update, context: CallbackContext) -> None:
         cleanup_temp_files(video_note_path, audio_path)
 
 def handle_message(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    user_settings = get_user_settings(context, user_id)
     message = update.message or update.edited_message
     
     if not message:
@@ -141,13 +146,29 @@ def handle_message(update: Update, context: CallbackContext) -> None:
     chat_type = message.chat.type
     logger.debug(f"Отримано повідомлення типу: {chat_type}")
 
-    # Отримуємо текст повідомлення
+    # Обробка аудіо повідомлень
+    if message.voice or message.audio:
+        logger.info("Отримано аудіоповідомлення")
+        handle_audio(update, context)
+        return
+
+    # Обробка відео повідомлень
+    if message.video and user_settings['ENABLE_VIDEO_PROCESSING']:
+        logger.info("Отримано відео")
+        handle_video(update, context)
+        return
+
+    # Обробка відео-нотаток
+    if message.video_note and user_settings['ENABLE_VIDEO_NOTE_PROCESSING']:
+        logger.info("Отримано відеоповідомлення")
+        handle_video_note(update, context)
+        return
+
     text = message.text or message.caption
     logger.debug(f"Текст повідомлення: {text}")
 
     image_path = None
 
-    # Перевіряємо, чи є зображення в цитованому повідомленні
     if message.reply_to_message and message.reply_to_message.photo:
         logger.debug("Виявлено зображення в цитованому повідомленні")
         image_file = message.reply_to_message.photo[-1].get_file()
@@ -155,18 +176,15 @@ def handle_message(update: Update, context: CallbackContext) -> None:
         image_file.download(image_path)
         logger.debug(f"Цитоване зображення завантажено: {image_path}")
 
-    # Визначаємо, чи потрібно обробляти повідомлення
     should_process = (
         (chat_type == 'private') or
         (chat_type in ['group', 'supergroup'] and text and text.lower().startswith("бот"))
     )
 
     if should_process:
-        # Видаляємо префікс "бот" для групових чатів
         if chat_type in ['group', 'supergroup'] and text and text.lower().startswith("бот"):
             text = text[3:].strip()
 
-        # Якщо зображення не було в цитованому повідомленні, перевіряємо поточне повідомлення
         if not image_path and message.photo:
             logger.debug("Виявлено зображення в поточному повідомленні")
             image_file = message.photo[-1].get_file()
@@ -174,63 +192,51 @@ def handle_message(update: Update, context: CallbackContext) -> None:
             image_file.download(image_path)
             logger.debug(f"Зображення завантажено: {image_path}")
         
-        # Відправляємо початкове повідомлення
+        # Перевірка наявності тексту або зображення
+        if not text and not image_path:
+            update.message.reply_text("Будь ласка, надайте текст або зображення для аналізу.")
+            return
+
         bot_message = message.reply_text("Аналізую запит...", parse_mode='Markdown')
         
         try:
-            # Отримуємо аналіз контенту
             full_response = ""
             for chunk in analyze_content(text, image_path):
                 full_response += chunk
-                if len(full_response) % 100 == 0:  # Оновлюємо кожні 100 символів
+                if len(full_response) % 100 == 0:
                     try:
                         context.bot.edit_message_text(
                             chat_id=update.effective_chat.id,
                             message_id=bot_message.message_id,
-                            text=full_response[:4096],  # Обмежуємо довжину повідомлення
+                            text=full_response[:4096],
                             parse_mode='Markdown'
                         )
                     except Exception as e:
                         logger.error(f"Помилка при оновленні повідомлення: {e}")
             
-            # Відправляємо фінальне повідомлення
             try:
                 context.bot.edit_message_text(
                     chat_id=update.effective_chat.id,
                     message_id=bot_message.message_id,
-                    text=full_response[:4096],  # Обмежуємо довжину повідомлення
+                    text=full_response[:4096],
                     parse_mode='Markdown'
                 )
             except Exception as e:
                 logger.error(f"Помилка при відправці фінального повідомлення: {e}")
         finally:
-            # Видаляємо тимчасовий файл зображення, якщо він був створений
             if image_path:
                 cleanup_temp_files(image_path)
     
-    elif message.video_note:
-        logger.info("Отримано відеоповідомлення")
-        handle_video_note(update, context)
-    
-    elif message.voice or message.audio:
-        logger.info("Отримано аудіоповідомлення")
-        handle_audio(update, context)
-    
-    elif message.video:
-        logger.info("Отримано відео")
-        handle_video(update, context)
-    
     elif update.message.reply_to_message and text:
-        from .settings_handler import ENABLE_REWRITING, ENABLE_SUMMARIZATION, ENABLE_POSTPROCESSING
         original_message = update.message.reply_to_message.text
 
-        if ENABLE_REWRITING and "перепиши" in text.lower():
+        if user_settings['ENABLE_REWRITING'] and "перепиши" in text.lower():
             rewrite = rewrite_text(original_message)
             update.message.reply_text(f'Переписаний текст:\n`\n{rewrite}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
-        elif ENABLE_SUMMARIZATION and "резюме" in text.lower():
+        elif user_settings['ENABLE_SUMMARIZATION'] and "резюме" in text.lower():
             summary = summarize_text(original_message)
             update.message.reply_text(f'Резюме:\n`\n{summary}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
-        elif ENABLE_POSTPROCESSING and "постобробка" in text.lower():
+        elif user_settings['ENABLE_POSTPROCESSING'] and "постобробка" in text.lower():
             postprocess = postprocess_text(original_message)
             update.message.reply_text(f'Оброблений текст:\n`\n{postprocess}\n`', parse_mode='Markdown', reply_to_message_id=update.message.message_id)
     
