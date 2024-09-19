@@ -1,6 +1,6 @@
 import logging
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
-from bot.handlers import start, handle_message, settings_menu
+from bot.handlers import start, handle_message, settings_menu, button_handler
 from bot.settings import error
 from bot.settings_handler import (
     toggle_postprocessing, toggle_summarization, toggle_rewriting,
@@ -10,6 +10,7 @@ from bot.settings_handler import (
     context_settings_menu, reset_context
 )
 from tokens import TOKEN
+
 
 # Налаштування логування
 logging.basicConfig(
@@ -49,6 +50,7 @@ def main() -> None:
     
     # Обробник для повернення до головного меню
     dispatcher.add_handler(CallbackQueryHandler(settings_menu, pattern='back_to_main'))
+    dispatcher.add_handler(CallbackQueryHandler(button_handler, pattern='^send_to_bot:'))
     
     dispatcher.add_handler(MessageHandler(Filters.all, handle_message))
 

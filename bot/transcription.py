@@ -1,8 +1,8 @@
 import requests
 import logging
 from tokens import WHISPER_API_KEY, GPT_API_KEY
-import sseclient
 import json
+import sseclient
 import re
 import base64
 
@@ -53,8 +53,8 @@ def postprocess_text(text: str) -> str:
     else:
         return 'Не вдалося обробити текст через GPT-3.5 Turbo.'
 
-def summarize_text(text: str) -> str:
-    logger.info(f"Резюме тексту через GPT-4")
+def summarize_text(text: str):
+    logger.info(f"Резюмування тексту через GPT-4 зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
@@ -62,53 +62,75 @@ def summarize_text(text: str) -> str:
     }
     messages = [
         {'role': 'system', 'content': 'Ви є помічником, який допомагає створювати резюме тексту.'},
-        {'role': 'user', 'content': f"Зробіть резюме наступного тексту:\n\n{text}"}
+        {'role': 'user', 'content': f"Зробіть стисле резюме наступного тексту:\n\n{text}"}
     ]
     
     data = {
-        'model': 'gpt-4o',
+        'model': 'gpt-4',
         'messages': messages,
         'max_tokens': 150,
-        'temperature': 0.5
+        'temperature': 0.7,
+        'stream': True
     }
     
-    response = requests.post(url, headers=headers, json=data)
-    response_data = response.json()
-    logger.info(f"Відповідь від GPT-4o API: {response_data}")
-    
-    if 'choices' in response_data and len(response_data['choices']) > 0:
-        return response_data['choices'][0]['message']['content'].strip()
-    else:
-        return 'Не вдалося створити резюме тексту через GPT-4o.'
+    try:
+        response = requests.post(url, headers=headers, json=data, stream=True)
+        client = sseclient.SSEClient(response)
+        
+        for event in client.events():
+            if event.data != '[DONE]':
+                try:
+                    chunk = json.loads(event.data)
+                    content = chunk['choices'][0]['delta'].get('content', '')
+                    if content:
+                        yield content
+                except json.JSONDecodeError:
+                    logger.error(f"Помилка декодування JSON: {event.data}")
+            else:
+                break
+    except Exception as e:
+        logger.error(f"Помилка при резюмуванні тексту: {e}")
+        yield f"Виникла помилка при резюмуванні тексту: {str(e)}"
 
-def rewrite_text(text: str) -> str:
-    logger.info(f"Переписування тексту через GPT-4o")
+def rewrite_text(text: str):
+    logger.info(f"Переписування тексту через GPT-4 зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
         'Content-Type': 'application/json'
     }
     messages = [
-        {'role': 'system', 'content': 'Ви є помічником, який допомагає переписувати текст у красивій формі.'},
-        {'role': 'user', 'content': f"Перепишіть цей текст у красивій формі:\n\n{text}"}
+        {'role': 'system', 'content': 'Ви є помічником, який допомагає переписувати текст у іншому стилі.'},
+        {'role': 'user', 'content': f"Перепишіть цей текст, зберігаючи основний зміст, але змінюючи стиль та формулювання:\n\n{text}"}
     ]
     
     data = {
-        'model': 'gpt-4o',
+        'model': 'gpt-4',
         'messages': messages,
         'max_tokens': 1500,
-        'temperature': 0.5
+        'temperature': 0.7,
+        'stream': True
     }
     
-    response = requests.post(url, headers=headers, json=data)
-    response_data = response.json()
-    logger.info(f"Відповідь від GPT-4o API: {response_data}")
+    try:
+        response = requests.post(url, headers=headers, json=data, stream=True)
+        client = sseclient.SSEClient(response)
+        
+        for event in client.events():
+            if event.data != '[DONE]':
+                try:
+                    chunk = json.loads(event.data)
+                    content = chunk['choices'][0]['delta'].get('content', '')
+                    if content:
+                        yield content
+                except json.JSONDecodeError:
+                    logger.error(f"Помилка декодування JSON: {event.data}")
+            else:
+                break
+    except Exception as e:
+        logger.error(f"Помилка при переписуванні тексту: {e}")
+        yield f"Виникла помилка при переписуванні тексту: {str(e)}"
     
-    if 'choices' in response_data and len(response_data['choices']) > 0:
-        return response_data['choices'][0]['message']['content'].strip()
-    else:
-        return 'Не вдалося переписати текст через GPT-4o.'
-
 def query_gpt4(text: str) -> str:
     logger.info(f"Запит до GPT-4")
     url = "https://api.openai.com/v1/chat/completions"
@@ -263,7 +285,6 @@ def analyze_content(text: str = None, image_path: str = None, conversation_conte
     try:
         messages = [{"role": "system", "content": "Ви - помічник, здатний аналізувати текст та зображення."}]
 
-        # Додаємо контекст розмови, якщо він є
         if conversation_context:
             messages.extend(conversation_context)
 
@@ -274,9 +295,10 @@ def analyze_content(text: str = None, image_path: str = None, conversation_conte
             with open(image_path, "rb") as image_file:
                 encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
             
-            messages.append({
+            image_message = {
                 "role": "user",
                 "content": [
+                    {"type": "text", "text": "Аналіз цього зображення:"},
                     {
                         "type": "image_url",
                         "image_url": {
@@ -284,38 +306,39 @@ def analyze_content(text: str = None, image_path: str = None, conversation_conte
                         }
                     }
                 ]
-            })
+            }
+            messages.append(image_message)
 
         if not text and not image_path and not conversation_context:
             raise ValueError("Потрібно надати текст, зображення або контекст для аналізу")
 
         data = {
-            'model': 'gpt-4o',
+            'model': 'gpt-4o',  # Використовуємо актуальну модель для аналізу зображень
             'messages': messages,
             'max_tokens': 1000,
-            'stream': True
         }
 
-        response = requests.post(url, headers=headers, json=data, stream=True)
+        logger.debug(f"Відправка запиту до OpenAI API. Заголовки: {headers}, Дані: {data}")
+
+        response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()
 
-        for line in response.iter_lines():
-            if line:
-                line = line.decode('utf-8')
-                if line.startswith('data: '):
-                    json_str = line[6:]
-                    if json_str != '[DONE]':
-                        try:
-                            chunk = json.loads(json_str)
-                            content = chunk['choices'][0]['delta'].get('content', '')
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
-                            logger.error(f"Помилка декодування JSON: {line}")
+        response_data = response.json()
+        if 'choices' in response_data and len(response_data['choices']) > 0:
+            content = response_data['choices'][0]['message']['content']
+            yield content
+        else:
+            logger.error(f"Неочікувана відповідь API: {response_data}")
+            yield "Отримано неочікувану відповідь від API. Спробуйте ще раз."
 
-    except requests.RequestException as e:
-        logger.error(f"Помилка запиту API: {str(e)}")
-        yield f"Виникла помилка при аналізі контенту: {str(e)}"
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            logger.error(f"Помилка 404: Модель не знайдена. {e.response.text}")
+            yield "Вибачте, виникла проблема з моделлю AI. Будь ласка, спробуйте пізніше."
+        else:
+            logger.error(f"Помилка запиту API: {str(e)}")
+            logger.error(f"Відповідь сервера: {e.response.text if hasattr(e, 'response') else 'Недоступно'}")
+            yield f"Виникла помилка при аналізі контенту: {str(e)}"
     except Exception as e:
         logger.error(f"Неочікувана помилка: {str(e)}")
         yield f"Виникла неочікувана помилка: {str(e)}"
