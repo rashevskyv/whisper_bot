@@ -58,21 +58,25 @@ def cleanup_temp_files(*file_paths):
 async def send_streaming_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text_generator):
     message = await update.message.reply_text("Обробка розпочата...")
     full_text = ""
-    last_edit_time = 0
-    for text_chunk in text_generator:  # Змінено з async for на звичайний for
+    last_edit_time = time.time()
+    chunk_count = 0
+    async for text_chunk in text_generator:
         full_text += text_chunk
+        chunk_count += 1
         current_time = time.time()
-        if current_time - last_edit_time > 0.5:  # Оновлюємо кожні 0.5 секунд
+        if current_time - last_edit_time > 1 or len(full_text) >= 3900:
             try:
-                await message.edit_text(full_text)
+                await message.edit_text(full_text[:4096])
                 last_edit_time = current_time
+                logger.debug(f"Оновлено повідомлення. Кількість чанків: {chunk_count}")
             except Exception as e:
                 logger.error(f"Помилка при оновленні повідомлення: {e}")
-        await asyncio.sleep(0.01)  # Невелика затримка для запобігання блокування
+        await asyncio.sleep(0.01)
     try:
-        await message.delete()
+        await message.edit_text(full_text[:4096])
+        logger.info(f"Фінальне оновлення повідомлення. Загальна кількість чанків: {chunk_count}")
     except Exception as e:
-        logger.error(f"Помилка при видаленні повідомлення: {e}")
+        logger.error(f"Помилка при фінальному оновленні повідомлення: {e}")
     return full_text
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, audio_path: str = None, source: str = "audio") -> None:
@@ -97,9 +101,14 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, audio
             logger.info(f"Файл {source} успішно завантажено")
         
         logger.info(f"Початок транскрибації {source}")
-        transcription_generator = transcribe_audio(audio_path, user_settings['LANGUAGE'])
-        transcription = await send_streaming_message(update, context, transcription_generator)
+        streaming_message = await update.message.reply_text("Обробка розпочата...")
+        transcription = ""
+        async for chunk in transcribe_audio(audio_path, user_settings['LANGUAGE']):
+            transcription += chunk
+            await streaming_message.edit_text(transcription)
         
+        await streaming_message.delete()
+
         if transcription.startswith("Помилка:"):
             logger.error(f"Помилка при транскрибації {source}: {transcription}")
             await update.message.reply_text(transcription)
@@ -109,7 +118,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, audio
 
         if user_settings['ENABLE_POSTPROCESSING']:
             logger.info(f"Початок постобробки транскрипції {source}")
-            transcription = postprocess_text(transcription)
+            transcription = await postprocess_text(transcription)
             logger.info(f"Постобробка транскрипції {source} завершена")
 
         message_id = f"{source}_{user_id}_{int(time.time())}"
@@ -131,7 +140,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, audio
     
     except Exception as e:
         logger.error(f"Помилка при обробці {source}: {str(e)}", exc_info=True)
-        await update.message.reply_text(f"Виникла помилка при обробці {source}. Будь ласка, спробуйте ще раз.")
+        await update.message.reply_text(f"Виникла помилка при обробці {source}: {str(e)}. Будь ласка, спробуйте ще раз.")
     finally:
         if audio_path:
             cleanup_temp_files(audio_path)
@@ -300,7 +309,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     else:
                         await update.message.reply_text("Функція резюмування вимкнена в налаштуваннях.")
                     return
-                
+
                 elif "перепиши" in text.lower():
                     logger.info("Запит на переписування цитованого повідомлення")
                     if user_settings['ENABLE_REWRITING']:
@@ -330,7 +339,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     else:
                         await update.message.reply_text("Функція переписування вимкнена в налаштуваннях.")
                     return
-
+                
         # Обробка звичайних повідомлень
         should_process = (
             (chat_type == 'private') or
@@ -358,13 +367,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             if text or image_path:
                 try:
-                    await analyze_and_respond(update, context, text, image_path)
+                    response_generator = analyze_content(text, image_path, context_manager.get_context(user_id) if user_settings['ENABLE_CONTEXT'] else None)
+                    await send_streaming_message(update, context, response_generator)
                 except Exception as e:
                     logger.error(f"Помилка в analyze_and_respond: {e}", exc_info=True)
                     await update.message.reply_text("Виникла помилка при аналізі вашого запиту. Будь ласка, спробуйте ще раз.")
             else:
                 await update.message.reply_text("Будь ласка, надайте текст або зображення для аналізу.")
-                return
         
         else:
             logger.debug(f"Повідомлення не є запитом до бота. {user_info}, {chat_info}")
@@ -372,7 +381,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.error(f"Помилка при обробці повідомлення: {e}", exc_info=True)
         await update.message.reply_text("Виникла помилка при обробці вашого запиту. Будь ласка, спробуйте ще раз.")
-        
+
 async def analyze_and_respond(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, image_path: str = None):
     logger.info(f"Функція analyze_and_respond викликана. Текст: {text[:50]}..., Шлях до зображення: {image_path}")
     try:
@@ -463,5 +472,5 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception as e:
         logger.error(f"Не вдалося видалити кнопку: {e}")
-                
+                        
 __all__ = ['start', 'handle_message', 'settings_menu', 'button_handler', 'handle_audio', 'handle_video', 'handle_video_note']

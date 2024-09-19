@@ -37,7 +37,7 @@ DEFAULT_USER_SETTINGS = {
     'ENABLE_POSTPROCESSING': False,        # Вимкнено за замовчуванням для економії ресурсів
     'ENABLE_SUMMARIZATION': True,          # Увімкнено, корисно для довгих повідомлень
     'ENABLE_REWRITING': True,              # Увімкнено, корисно для покращення стилю
-    'ENABLE_VIDEO_PROCESSING': False,      # Вимкнено за замовчуванням, може вимагати багато ресурсів
+    'ENABLE_VIDEO_PROCESSING': True,      # Вимкнено за замовчуванням, може вимагати багато ресурсів
     'ENABLE_VIDEO_NOTE_PROCESSING': True,  # Увімкнено, корисно для коротких відео-повідомлень
     'LANGUAGE': 'uk',                      # Українська мова за замовчуванням
     'USE_GPT4': True,                      # Використовуємо GPT-4 за замовчуванням для кращої якості

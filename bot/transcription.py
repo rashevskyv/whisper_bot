@@ -14,44 +14,46 @@ import json
 import sseclient
 import re
 import base64
+import aiohttp
+import asyncio
 
 logger = logging.getLogger(__name__)
 
-def transcribe_audio(file_path: str, language: str):
+async def transcribe_audio(file_path: str, language: str):
     logger.info(f"Початок розшифровки аудіо з файлу: {file_path} мовою: {language}")
     url = "https://api.openai.com/v1/audio/transcriptions"
     headers = {
         'Authorization': f'Bearer {WHISPER_API_KEY}'
     }
     try:
-        with open(file_path, 'rb') as audio_file:
-            files = {
-                'file': audio_file,
-                'model': (None, 'whisper-1'),
-                'language': (None, language)
-            }
+        async with aiohttp.ClientSession() as session:
+            form = aiohttp.FormData()
+            form.add_field('file', open(file_path, 'rb'), filename=os.path.basename(file_path))
+            form.add_field('model', 'whisper-1')
+            form.add_field('language', language)
+
             logger.info("Відправка запиту на транскрибацію до API")
-            response = requests.post(url, headers=headers, files=files)
-            response.raise_for_status()
-            logger.info("Отримано відповідь від API")
-            response_json = response.json()
-            if 'text' in response_json:
-                logger.info("Успішно отримано текст транскрипції")
-                yield response_json['text']
-            else:
-                logger.error(f"Неочікувана структура відповіді: {response_json}")
-                yield "Помилка: неочікувана структура відповіді від API."
-    except requests.exceptions.RequestException as e:
+            async with session.post(url, headers=headers, data=form) as response:
+                response.raise_for_status()
+                logger.info("Отримано відповідь від API")
+                response_json = await response.json()
+                if 'text' in response_json:
+                    logger.info("Успішно отримано текст транскрипції")
+                    yield response_json['text']
+                else:
+                    logger.error(f"Неочікувана структура відповіді: {response_json}")
+                    yield f"Помилка: неочікувана структура відповіді від API. Відповідь: {response_json}"
+    except aiohttp.ClientError as e:
         logger.error(f"Помилка запиту: {str(e)}")
-        yield f"Помилка: {str(e)}"
+        yield f"Помилка запиту до API: {str(e)}"
     except json.JSONDecodeError:
-        logger.error(f"Не вдалося розпарсити JSON. Відповідь: {response.text}")
-        yield f"Помилка: не вдалося розпарсити відповідь від API. Відповідь: {response.text[:100]}..."
+        logger.error(f"Не вдалося розпарсити JSON. Відповідь: {await response.text()}")
+        yield f"Помилка: не вдалося розпарсити відповідь від API. Відповідь: {(await response.text())[:100]}..."
     except Exception as e:
         logger.error(f"Виникла помилка при транскрибації: {str(e)}")
-        yield f"Помилка: {str(e)}"
-                                
-def postprocess_text(text: str) -> str:
+        yield f"Неочікувана помилка при транскрибації: {str(e)}"
+
+async def postprocess_text(text: str) -> str:
     logger.info(f"Постобробка тексту через GPT")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -70,16 +72,18 @@ def postprocess_text(text: str) -> str:
         'temperature': GPT_SETTINGS['postprocess']['temperature']
     }
     
-    response = requests.post(url, headers=headers, json=data)
-    response_data = response.json()
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=data) as response:
+            response_data = await response.json()
+    
     logger.info(f"Відповідь від GPT API: {response_data}")
     
     if 'choices' in response_data and len(response_data['choices']) > 0:
         return response_data['choices'][0]['message']['content'].strip()
     else:
         return 'Не вдалося обробити текст через GPT.'
-
-def summarize_text(text: str):
+    
+async def summarize_text(text: str):
     logger.info(f"Резюмування тексту через GPT зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -100,25 +104,24 @@ def summarize_text(text: str):
     }
     
     try:
-        response = requests.post(url, headers=headers, json=data, stream=True)
-        client = sseclient.SSEClient(response)
-        
-        for event in client.events():
-            if event.data != '[DONE]':
-                try:
-                    chunk = json.loads(event.data)
-                    content = chunk['choices'][0]['delta'].get('content', '')
-                    if content:
-                        yield content
-                except json.JSONDecodeError:
-                    logger.error(f"Помилка декодування JSON: {event.data}")
-            else:
-                break
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=data) as response:
+                async for line in response.content:
+                    if line:
+                        try:
+                            json_response = json.loads(line.decode('utf-8').split('data: ')[1])
+                            content = json_response['choices'][0]['delta'].get('content', '')
+                            if content:
+                                yield content
+                        except json.JSONDecodeError:
+                            continue
+                        except Exception as e:
+                            logger.error(f"Помилка при обробці відповіді: {e}")
     except Exception as e:
         logger.error(f"Помилка при резюмуванні тексту: {e}")
         yield f"Виникла помилка при резюмуванні тексту: {str(e)}"
 
-def rewrite_text(text: str):
+async def rewrite_text(text: str):
     logger.info(f"Переписування тексту через GPT зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -139,24 +142,23 @@ def rewrite_text(text: str):
     }
     
     try:
-        response = requests.post(url, headers=headers, json=data, stream=True)
-        client = sseclient.SSEClient(response)
-        
-        for event in client.events():
-            if event.data != '[DONE]':
-                try:
-                    chunk = json.loads(event.data)
-                    content = chunk['choices'][0]['delta'].get('content', '')
-                    if content:
-                        yield content
-                except json.JSONDecodeError:
-                    logger.error(f"Помилка декодування JSON: {event.data}")
-            else:
-                break
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=data) as response:
+                async for line in response.content:
+                    if line:
+                        try:
+                            json_response = json.loads(line.decode('utf-8').split('data: ')[1])
+                            content = json_response['choices'][0]['delta'].get('content', '')
+                            if content:
+                                yield content
+                        except json.JSONDecodeError:
+                            continue
+                        except Exception as e:
+                            logger.error(f"Помилка при обробці відповіді: {e}")
     except Exception as e:
         logger.error(f"Помилка при переписуванні тексту: {e}")
         yield f"Виникла помилка при переписуванні тексту: {str(e)}"
-
+        
 def query_gpt4(text: str) -> str:
     logger.info(f"Запит до GPT")
     url = "https://api.openai.com/v1/chat/completions"
@@ -185,7 +187,7 @@ def query_gpt4(text: str) -> str:
     else:
         return 'Не вдалося отримати відповідь від GPT.'
 
-def query_gpt4_stream(text: str):
+async def query_gpt4_stream(text: str):
     logger.info(f"Запит до GPT зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -216,20 +218,19 @@ def query_gpt4_stream(text: str):
         'stream': True
     }
     
-    response = requests.post(url, headers=headers, json=data, stream=True)
-    client = sseclient.SSEClient(response)
-    
-    for event in client.events():
-        if event.data != '[DONE]':
-            try:
-                chunk = json.loads(event.data)
-                content = chunk['choices'][0]['delta'].get('content', '')
-                if content:
-                    yield content
-            except json.JSONDecodeError:
-                logger.error(f"Помилка декодування JSON: {event.data}")
-        else:
-            break
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=data) as response:
+            async for line in response.content:
+                if line:
+                    try:
+                        json_response = json.loads(line.decode('utf-8').split('data: ')[1])
+                        content = json_response['choices'][0]['delta'].get('content', '')
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
+                    except Exception as e:
+                        logger.error(f"Помилка при обробці відповіді: {e}")
 
 def analyze_image(image_path: str, prompt: str):
     logger.info(f"Аналіз зображення: {image_path}")
@@ -295,7 +296,7 @@ def analyze_image(image_path: str, prompt: str):
     except Exception as e:
         logger.error(f"Помилка при аналізі зображення: {str(e)}", exc_info=True)
         yield f"Виникла помилка при аналізі зображення: {str(e)}"
-        
+
 async def analyze_content(text: str = None, image_path: str = None, conversation_context: list = None):
     logger.info(f"Аналіз контенту: текст {'присутній' if text else 'відсутній'}, зображення {'присутнє' if image_path else 'відсутнє'}, контекст {'присутній' if conversation_context else 'відсутній'}")
     url = "https://api.openai.com/v1/chat/completions"
@@ -339,36 +340,26 @@ async def analyze_content(text: str = None, image_path: str = None, conversation
             'messages': messages,
             'max_tokens': GPT_SETTINGS['analyze_content']['max_tokens'],
             'temperature': GPT_SETTINGS['analyze_content']['temperature'],
+            'stream': True
         }
 
-        logger.debug(f"Відправка запиту до OpenAI API. Заголовки: {headers}, Дані: {data}")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=data) as response:
+                async for line in response.content:
+                    if line:
+                        try:
+                            json_response = json.loads(line.decode('utf-8').split('data: ')[1])
+                            content = json_response['choices'][0]['delta'].get('content', '')
+                            if content:
+                                yield content
+                        except json.JSONDecodeError:
+                            continue
+                        except Exception as e:
+                            logger.error(f"Помилка при обробці відповіді: {e}")
 
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-
-        response_data = response.json()
-        logger.debug(f"Отримано відповідь від API: {response_data}")
-        
-        if 'choices' in response_data and len(response_data['choices']) > 0:
-            content = response_data['choices'][0]['message']['content']
-            logger.info(f"Успішно отримано контент від API")
-            yield content
-        else:
-            logger.error(f"Неочікувана відповідь API: {response_data}")
-            yield "Отримано неочікувану відповідь від API. Спробуйте ще раз."
-
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            logger.error(f"Помилка 404: Модель не знайдена. {e.response.text}")
-            yield "Вибачте, виникла проблема з моделлю AI. Будь ласка, спробуйте пізніше."
-        else:
-            logger.error(f"Помилка запиту API: {str(e)}")
-            logger.error(f"Відповідь сервера: {e.response.text if hasattr(e, 'response') else 'Недоступно'}")
-            yield f"Виникла помилка при аналізі контенту: {str(e)}"
     except Exception as e:
-        logger.error(f"Неочікувана помилка: {str(e)}")
-        logger.error(traceback.format_exc())
-        yield f"Виникла неочікувана помилка: {str(e)}"
+        logger.error(f"Помилка при аналізі контенту: {str(e)}")
+        yield f"Виникла помилка при аналізі контенту: {str(e)}"
 
 # Додаткові допоміжні функції можуть бути додані тут за потреби
 
