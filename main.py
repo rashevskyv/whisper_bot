@@ -11,7 +11,6 @@ from bot.settings_handler import (
 )
 from tokens import TOKEN
 
-
 # Налаштування логування
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
