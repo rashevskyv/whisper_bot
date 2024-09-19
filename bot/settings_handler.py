@@ -1,6 +1,6 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import CallbackContext
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
 from .context_manager import context_manager
 
 logger = logging.getLogger(__name__)
@@ -18,18 +18,18 @@ DEFAULT_SETTINGS = {
     'ENABLE_CONTEXT': True
 }
 
-def get_user_settings(context: CallbackContext, user_id: int):
+def get_user_settings(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     if 'user_settings' not in context.bot_data:
         context.bot_data['user_settings'] = {}
     if user_id not in context.bot_data['user_settings']:
         context.bot_data['user_settings'][user_id] = DEFAULT_SETTINGS.copy()
     return context.bot_data['user_settings'][user_id]
 
-def update_user_setting(context: CallbackContext, user_id: int, setting: str, value):
+def update_user_setting(context: ContextTypes.DEFAULT_TYPE, user_id: int, setting: str, value):
     user_settings = get_user_settings(context, user_id)
     user_settings[setting] = value
 
-def settings_menu(update: Update, context: CallbackContext) -> None:
+async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
         [InlineKeyboardButton("Обробка тексту", callback_data='text_processing')],
         [InlineKeyboardButton("Обробка медіа", callback_data='media_processing')],
@@ -38,11 +38,11 @@ def settings_menu(update: Update, context: CallbackContext) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     if update.callback_query:
-        update.callback_query.edit_message_text(text="Оберіть категорію налаштувань:", reply_markup=reply_markup)
+        await update.callback_query.edit_message_text(text="Оберіть категорію налаштувань:", reply_markup=reply_markup)
     else:
-        update.message.reply_text("Оберіть категорію налаштувань:", reply_markup=reply_markup)
+        await update.message.reply_text("Оберіть категорію налаштувань:", reply_markup=reply_markup)
 
-def text_processing_menu(update: Update, context: CallbackContext) -> None:
+async def text_processing_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
     
@@ -59,9 +59,9 @@ def text_processing_menu(update: Update, context: CallbackContext) -> None:
         [InlineKeyboardButton("Назад", callback_data='back_to_main')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.callback_query.edit_message_text(text="Налаштування обробки тексту:", reply_markup=reply_markup)
+    await update.callback_query.edit_message_text(text="Налаштування обробки тексту:", reply_markup=reply_markup)
 
-def media_processing_menu(update: Update, context: CallbackContext) -> None:
+async def media_processing_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
     
@@ -75,9 +75,9 @@ def media_processing_menu(update: Update, context: CallbackContext) -> None:
         [InlineKeyboardButton("Назад", callback_data='back_to_main')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.callback_query.edit_message_text(text="Налаштування обробки медіа:", reply_markup=reply_markup)
+    await update.callback_query.edit_message_text(text="Налаштування обробки медіа:", reply_markup=reply_markup)
 
-def ai_settings_menu(update: Update, context: CallbackContext) -> None:
+async def ai_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
     
@@ -91,9 +91,9 @@ def ai_settings_menu(update: Update, context: CallbackContext) -> None:
         [InlineKeyboardButton("Назад", callback_data='back_to_main')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.callback_query.edit_message_text(text="Налаштування AI:", reply_markup=reply_markup)
+    await update.callback_query.edit_message_text(text="Налаштування AI:", reply_markup=reply_markup)
 
-def context_settings_menu(update: Update, context: CallbackContext) -> None:
+async def context_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
     
@@ -108,36 +108,36 @@ def context_settings_menu(update: Update, context: CallbackContext) -> None:
         [InlineKeyboardButton("Назад", callback_data='back_to_main')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.callback_query.edit_message_text(text="Налаштування контексту:", reply_markup=reply_markup)
+    await update.callback_query.edit_message_text(text="Налаштування контексту:", reply_markup=reply_markup)
 
-def toggle_setting(update: Update, context: CallbackContext, setting: str) -> None:
+async def toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, setting: str) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
     user_settings[setting] = not user_settings[setting]
     logger.info(f"{setting} {'увімкнено' if user_settings[setting] else 'вимкнено'} для користувача {user_id}")
-    update.callback_query.answer(f"{setting} {'увімкнено' if user_settings[setting] else 'вимкнено'}")
+    await update.callback_query.answer(f"{setting} {'увімкнено' if user_settings[setting] else 'вимкнено'}")
 
-def toggle_postprocessing(update: Update, context: CallbackContext) -> None:
-    toggle_setting(update, context, 'ENABLE_POSTPROCESSING')
-    text_processing_menu(update, context)
+async def toggle_postprocessing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await toggle_setting(update, context, 'ENABLE_POSTPROCESSING')
+    await text_processing_menu(update, context)
 
-def toggle_summarization(update: Update, context: CallbackContext) -> None:
-    toggle_setting(update, context, 'ENABLE_SUMMARIZATION')
-    text_processing_menu(update, context)
+async def toggle_summarization(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await toggle_setting(update, context, 'ENABLE_SUMMARIZATION')
+    await text_processing_menu(update, context)
 
-def toggle_rewriting(update: Update, context: CallbackContext) -> None:
-    toggle_setting(update, context, 'ENABLE_REWRITING')
-    text_processing_menu(update, context)
+async def toggle_rewriting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await toggle_setting(update, context, 'ENABLE_REWRITING')
+    await text_processing_menu(update, context)
 
-def toggle_video_processing(update: Update, context: CallbackContext) -> None:
-    toggle_setting(update, context, 'ENABLE_VIDEO_PROCESSING')
-    media_processing_menu(update, context)
+async def toggle_video_processing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await toggle_setting(update, context, 'ENABLE_VIDEO_PROCESSING')
+    await media_processing_menu(update, context)
 
-def toggle_video_note_processing(update: Update, context: CallbackContext) -> None:
-    toggle_setting(update, context, 'ENABLE_VIDEO_NOTE_PROCESSING')
-    media_processing_menu(update, context)
+async def toggle_video_note_processing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await toggle_setting(update, context, 'ENABLE_VIDEO_NOTE_PROCESSING')
+    await media_processing_menu(update, context)
 
-def change_language(update: Update, context: CallbackContext) -> None:
+async def change_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
     if user_settings['LANGUAGE'] == 'uk':
@@ -150,22 +150,22 @@ def change_language(update: Update, context: CallbackContext) -> None:
         user_settings['LANGUAGE'] = 'uk'
         language_name = 'Українська'
     logger.info(f"Мова змінена на {user_settings['LANGUAGE']} для користувача {user_id}")
-    update.callback_query.answer(f"Мова змінена на {language_name}")
-    ai_settings_menu(update, context)
+    await update.callback_query.answer(f"Мова змінена на {language_name}")
+    await ai_settings_menu(update, context)
 
-def toggle_ai(update: Update, context: CallbackContext) -> None:
-    toggle_setting(update, context, 'USE_GPT4')
-    ai_settings_menu(update, context)
+async def toggle_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await toggle_setting(update, context, 'USE_GPT4')
+    await ai_settings_menu(update, context)
 
-def toggle_context(update: Update, context: CallbackContext) -> None:
-    toggle_setting(update, context, 'ENABLE_CONTEXT')
+async def toggle_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await toggle_setting(update, context, 'ENABLE_CONTEXT')
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
     if not user_settings['ENABLE_CONTEXT']:
         context_manager.clear_context(user_id)
-    context_settings_menu(update, context)
+    await context_settings_menu(update, context)
 
-def change_context_duration(update: Update, context: CallbackContext) -> None:
+async def change_context_duration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
     durations = [1, 3, 6, 12, 24, 48, 72]
@@ -174,14 +174,14 @@ def change_context_duration(update: Update, context: CallbackContext) -> None:
     user_settings['CONTEXT_DURATION'] = new_duration
     context_manager.set_context_duration(user_id, new_duration * 3600)  # конвертуємо години в секунди
     logger.info(f"Тривалість контексту змінена на {new_duration} годин для користувача {user_id}")
-    update.callback_query.answer(f"Тривалість контексту змінена на {new_duration} годин")
-    context_settings_menu(update, context)
+    await update.callback_query.answer(f"Тривалість контексту змінена на {new_duration} годин")
+    await context_settings_menu(update, context)
 
-def reset_context(update: Update, context: CallbackContext) -> None:
+async def reset_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     context_manager.clear_context(user_id)
-    update.callback_query.answer("Контекст скинуто")
-    context_settings_menu(update, context)
+    await update.callback_query.answer("Контекст скинуто")
+    await context_settings_menu(update, context)
 
 # Експортуємо всі необхідні функції та змінні
 __all__ = ['get_user_settings', 'update_user_setting', 'settings_menu', 'toggle_postprocessing', 

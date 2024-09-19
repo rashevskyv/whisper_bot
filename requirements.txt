@@ -1,4 +1,4 @@
-python-telegram-bot==13.7
-requests==2.26.0
+python-telegram-bot==21.5
+requests==2.32.3
 moviepy==1.0.3
 sseclient-py==1.7.2	

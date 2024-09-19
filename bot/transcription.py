@@ -18,32 +18,39 @@ import base64
 logger = logging.getLogger(__name__)
 
 def transcribe_audio(file_path: str, language: str):
-    logger.info(f"Розшифровка аудіо з файлу: {file_path} мовою: {language}")
+    logger.info(f"Початок розшифровки аудіо з файлу: {file_path} мовою: {language}")
     url = "https://api.openai.com/v1/audio/transcriptions"
     headers = {
         'Authorization': f'Bearer {WHISPER_API_KEY}'
     }
-    with open(file_path, 'rb') as audio_file:
-        files = {
-            'file': audio_file,
-            'model': (None, 'whisper-1'),
-            'language': (None, language)
-        }
-        with requests.post(url, headers=headers, files=files, stream=True) as response:
+    try:
+        with open(file_path, 'rb') as audio_file:
+            files = {
+                'file': audio_file,
+                'model': (None, 'whisper-1'),
+                'language': (None, language)
+            }
+            logger.info("Відправка запиту на транскрибацію до API")
+            response = requests.post(url, headers=headers, files=files)
             response.raise_for_status()
-            # Читаємо всю відповідь разом
-            full_response = response.text
-            try:
-                response_json = json.loads(full_response)
-                if 'text' in response_json:
-                    yield response_json['text']
-                else:
-                    logger.error(f"Неочікувана структура відповіді: {response_json}")
-                    yield "Помилка: неочікувана структура відповіді від API."
-            except json.JSONDecodeError:
-                logger.error(f"Не вдалося розпарсити JSON. Відповідь: {full_response}")
-                yield f"Помилка: не вдалося розпарсити відповідь від API. Відповідь: {full_response[:100]}..."
-                
+            logger.info("Отримано відповідь від API")
+            response_json = response.json()
+            if 'text' in response_json:
+                logger.info("Успішно отримано текст транскрипції")
+                yield response_json['text']
+            else:
+                logger.error(f"Неочікувана структура відповіді: {response_json}")
+                yield "Помилка: неочікувана структура відповіді від API."
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Помилка запиту: {str(e)}")
+        yield f"Помилка: {str(e)}"
+    except json.JSONDecodeError:
+        logger.error(f"Не вдалося розпарсити JSON. Відповідь: {response.text}")
+        yield f"Помилка: не вдалося розпарсити відповідь від API. Відповідь: {response.text[:100]}..."
+    except Exception as e:
+        logger.error(f"Виникла помилка при транскрибації: {str(e)}")
+        yield f"Помилка: {str(e)}"
+                                
 def postprocess_text(text: str) -> str:
     logger.info(f"Постобробка тексту через GPT")
     url = "https://api.openai.com/v1/chat/completions"
@@ -281,7 +288,7 @@ def analyze_image(image_path: str, prompt: str):
         logger.error(f"Помилка при аналізі зображення: {str(e)}")
         yield f"Виникла помилка при аналізі зображення: {str(e)}"
 
-def analyze_content(text: str = None, image_path: str = None, conversation_context: list = None):
+async def analyze_content(text: str = None, image_path: str = None, conversation_context: list = None):
     logger.info(f"Аналіз контенту: текст {'присутній' if text else 'відсутній'}, зображення {'присутнє' if image_path else 'відсутнє'}, контекст {'присутній' if conversation_context else 'відсутній'}")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -332,8 +339,11 @@ def analyze_content(text: str = None, image_path: str = None, conversation_conte
         response.raise_for_status()
 
         response_data = response.json()
+        logger.debug(f"Отримано відповідь від API: {response_data}")
+        
         if 'choices' in response_data and len(response_data['choices']) > 0:
             content = response_data['choices'][0]['message']['content']
+            logger.info(f"Успішно отримано контент від API")
             yield content
         else:
             logger.error(f"Неочікувана відповідь API: {response_data}")
@@ -349,6 +359,7 @@ def analyze_content(text: str = None, image_path: str = None, conversation_conte
             yield f"Виникла помилка при аналізі контенту: {str(e)}"
     except Exception as e:
         logger.error(f"Неочікувана помилка: {str(e)}")
+        logger.error(traceback.format_exc())
         yield f"Виникла неочікувана помилка: {str(e)}"
 
 # Додаткові допоміжні функції можуть бути додані тут за потреби
