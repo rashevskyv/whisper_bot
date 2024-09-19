@@ -208,6 +208,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         user_id = update.effective_user.id
         user_settings = get_user_settings(context, user_id)
+        logger.info(f"Отримано налаштування для користувача {user_id}: {user_settings}")
+        
         message = update.message or update.edited_message
         
         if not message:
@@ -223,13 +225,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         logger.debug(f"Отримано повідомлення. {user_info}, {chat_info}, Тип чату: {chat_type}")
 
-        text = message.text or message.caption
+        text = message.text or message.caption or ""
         
         if text == "Меню":
             logger.info("Викликано меню налаштувань")
             await settings_menu(update, context)
             return
-
+                
         # Функція для перевірки наявності ключових слів резюмування
         def is_summarize_command(text, chat_type):
             summarize_keywords = r'\b(резюме|підсумуй|резюмуй|підсумок)\w*'
@@ -336,7 +338,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
         if should_process:
-            logger.info(f"Обробка повідомлення: {text[:50]}...")  # Логуємо перші 50 символів повідомлення
+            logger.info(f"Обробка повідомлення: {text[:50] if text else 'Зображення без тексту'}...")
             if chat_type in ['group', 'supergroup'] and text and text.lower().startswith("бот"):
                 text = text[3:].strip()
 
@@ -345,11 +347,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 logger.debug(f"Виявлено зображення в поточному повідомленні. {user_info}, {chat_info}")
                 image_file = await message.photo[-1].get_file()
                 image_path = os.path.join(temp_dir, f'{image_file.file_id}.jpg')
-                await image_file.download_to_drive(image_path)
-                logger.debug(f"Зображення завантажено: {image_path}")
+                logger.debug(f"Спроба завантаження зображення: {image_path}")
+                try:
+                    await image_file.download_to_drive(image_path)
+                    logger.debug(f"Зображення успішно завантажено: {image_path}")
+                except Exception as e:
+                    logger.error(f"Помилка при завантаженні зображення: {e}", exc_info=True)
+                    await update.message.reply_text("Виникла помилка при завантаженні зображення. Будь ласка, спробуйте ще раз.")
+                    return
             
             if text or image_path:
-                await analyze_and_respond(update, context, text, image_path)
+                try:
+                    await analyze_and_respond(update, context, text, image_path)
+                except Exception as e:
+                    logger.error(f"Помилка в analyze_and_respond: {e}", exc_info=True)
+                    await update.message.reply_text("Виникла помилка при аналізі вашого запиту. Будь ласка, спробуйте ще раз.")
             else:
                 await update.message.reply_text("Будь ласка, надайте текст або зображення для аналізу.")
                 return
@@ -358,27 +370,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.debug(f"Повідомлення не є запитом до бота. {user_info}, {chat_info}")
 
     except Exception as e:
-        logger.error(f"Помилка при обробці повідомлення: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Помилка при обробці повідомлення: {e}", exc_info=True)
         await update.message.reply_text("Виникла помилка при обробці вашого запиту. Будь ласка, спробуйте ще раз.")
-
+        
 async def analyze_and_respond(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, image_path: str = None):
-    logger.info("Функція analyze_and_respond викликана")
+    logger.info(f"Функція analyze_and_respond викликана. Текст: {text[:50]}..., Шлях до зображення: {image_path}")
     try:
         user_id = update.effective_user.id
         user_settings = get_user_settings(context, user_id)
+        logger.info(f"Отримано налаштування для користувача {user_id}: {user_settings}")
         
         bot_message = await update.effective_message.reply_text("Аналізую запит...", parse_mode=ParseMode.MARKDOWN)
+        logger.debug("Відправлено початкове повідомлення про аналіз")
         
         full_response = ""
         
         if user_settings['ENABLE_CONTEXT']:
             conversation_context = context_manager.get_context(user_id)
+            logger.debug(f"Отримано контекст розмови для користувача {user_id}: {len(conversation_context)} повідомлень")
         else:
             conversation_context = []
+            logger.debug("Контекст розмови вимкнено")
         
         if user_settings['ENABLE_CONTEXT']:
             context_manager.add_message(user_id, 'user', text)
+            logger.debug(f"Додано повідомлення користувача до контексту: {text[:50]}...")
         
         logger.info("Початок аналізу контенту")
         async for chunk in analyze_content(text, image_path, conversation_context):
@@ -391,6 +407,7 @@ async def analyze_and_respond(update: Update, context: ContextTypes.DEFAULT_TYPE
                         text=full_response[:4096],
                         parse_mode=ParseMode.MARKDOWN
                     )
+                    logger.debug(f"Оновлено проміжне повідомлення. Довжина відповіді: {len(full_response)}")
                 except Exception as e:
                     logger.error(f"Помилка при оновленні повідомлення: {e}")
         
@@ -418,13 +435,15 @@ async def analyze_and_respond(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if user_settings['ENABLE_CONTEXT']:
             context_manager.add_message(user_id, 'assistant', full_response)
+            logger.debug("Додано відповідь асистента до контексту")
+
     except Exception as e:
-        logger.error(f"Помилка при аналізі та відповіді: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Помилка при аналізі та відповіді: {e}", exc_info=True)
         await update.effective_message.reply_text("Виникла помилка при обробці вашого запиту. Будь ласка, спробуйте ще раз.")
     finally:
         if image_path:
             cleanup_temp_files(image_path)
+            logger.debug(f"Очищено тимчасовий файл зображення: {image_path}")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

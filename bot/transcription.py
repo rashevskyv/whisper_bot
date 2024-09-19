@@ -240,8 +240,10 @@ def analyze_image(image_path: str, prompt: str):
     }
 
     try:
+        logger.debug(f"Спроба відкриття файлу зображення: {image_path}")
         with open(image_path, "rb") as image_file:
             encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+        logger.debug(f"Зображення успішно закодовано. Розмір: {len(encoded_image)}")
 
         messages = [
             {
@@ -268,6 +270,7 @@ def analyze_image(image_path: str, prompt: str):
             'temperature': GPT_SETTINGS['analyze_content']['temperature']
         }
 
+        logger.debug("Відправка запиту до API OpenAI")
         response = requests.post(url, headers=headers, json=data)
         
         if response.status_code != 200:
@@ -276,18 +279,23 @@ def analyze_image(image_path: str, prompt: str):
             return
 
         response_data = response.json()
+        logger.debug(f"Отримано відповідь від API: {response_data}")
         
         if 'choices' in response_data and len(response_data['choices']) > 0:
             content = response_data['choices'][0]['message']['content']
+            logger.info("Успішно отримано аналіз зображення")
             yield content
         else:
             logger.error(f"Неочікувана відповідь API: {response_data}")
             yield "Отримано неочікувану відповідь від API. Спробуйте ще раз."
 
+    except FileNotFoundError:
+        logger.error(f"Файл зображення не знайдено: {image_path}")
+        yield f"Помилка: файл зображення не знайдено: {image_path}"
     except Exception as e:
-        logger.error(f"Помилка при аналізі зображення: {str(e)}")
+        logger.error(f"Помилка при аналізі зображення: {str(e)}", exc_info=True)
         yield f"Виникла помилка при аналізі зображення: {str(e)}"
-
+        
 async def analyze_content(text: str = None, image_path: str = None, conversation_context: list = None):
     logger.info(f"Аналіз контенту: текст {'присутній' if text else 'відсутній'}, зображення {'присутнє' if image_path else 'відсутнє'}, контекст {'присутній' if conversation_context else 'відсутній'}")
     url = "https://api.openai.com/v1/chat/completions"
