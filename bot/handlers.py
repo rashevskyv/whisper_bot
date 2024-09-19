@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import asyncio
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
@@ -15,6 +16,14 @@ logger = logging.getLogger(__name__)
 # Глобальне визначення temp_dir
 temp_dir = os.path.join(os.getcwd(), 'temp')
 os.makedirs(temp_dir, exist_ok=True)
+
+def start(update: Update, context: CallbackContext) -> None:
+    logger.info("Команда /start отримана")
+    keyboard = [
+        [KeyboardButton("Меню")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+    update.message.reply_text('Вітаю! Надішліть мені аудіофайл, і я розшифрую його в текст. Або почніть повідомлення зі слова "бот", щоб спілкуватися з AI. Для налаштувань натисніть кнопку "Меню".', reply_markup=reply_markup)
 
 def escape_markdown(text):
     """Функція для екранування спеціальних символів у Markdown V2"""
@@ -40,68 +49,71 @@ def cleanup_temp_files(*file_paths):
         else:
             logger.error(f"Не вдалося видалити файл {file_path} після кількох спроб")
 
-def start(update: Update, context: CallbackContext) -> None:
-    logger.info("Команда /start отримана")
-    keyboard = [
-        [KeyboardButton("Меню")]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    update.message.reply_text('Вітаю! Надішліть мені аудіофайл, і я розшифрую його в текст. Або почніть повідомлення зі слова "бот", щоб спілкуватися з AI. Для налаштувань натисніть кнопку "Меню".', reply_markup=reply_markup)
+async def send_streaming_message(update: Update, context: CallbackContext, text_generator):
+    message = await update.message.reply_text("Обробка розпочата...")
+    full_text = ""
+    last_edit_time = 0
+    for text_chunk in text_generator:
+        full_text += text_chunk
+        current_time = time.time()
+        if current_time - last_edit_time > 0.5:  # Оновлюємо кожні 0.5 секунд
+            try:
+                await message.edit_text(full_text)
+                last_edit_time = current_time
+            except Exception as e:
+                logger.error(f"Помилка при оновленні повідомлення: {e}")
+        await asyncio.sleep(0.01)  # Невелика затримка для запобігання блокування
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.error(f"Помилка при видаленні повідомлення: {e}")
+    return full_text
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-def handle_audio(update: Update, context: CallbackContext, audio_path: str = None) -> None:
+async def handle_audio(update: Update, context: CallbackContext, audio_path: str = None, source: str = "audio") -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
-    user = update.effective_user
-    chat = update.effective_chat
-
-    user_info = f"User: {user.first_name} {user.last_name or ''} (@{user.username or 'No username'}, ID: {user.id})"
-    chat_info = f"Chat: {chat.title or 'Private'} (@{chat.username or 'No username'}, ID: {chat.id})"
-    
-    logger.info(f"Отримано аудіофайл від користувача. {user_info}, {chat_info}")
     
     if not audio_path:
-        audio_file = update.message.audio or update.message.voice
-        file = context.bot.getFile(audio_file.file_id)
-        audio_path = os.path.join(temp_dir, f'{audio_file.file_id}.ogg')
-        file.download(audio_path)
-        logger.info(f"Файл завантажено для обробки: {audio_path}")
-
-    try:
-        transcription = transcribe_audio(audio_path, user_settings['LANGUAGE'])
-        
-        if user_settings['ENABLE_POSTPROCESSING']:
-            postprocessed_text = postprocess_text(transcription)
-            output_text = f'Розшифровка аудіо (після обробки):\n`\n{postprocessed_text}\n`'
+        if source == "audio":
+            audio_file = update.message.audio or update.message.voice
+        elif source in ["video", "video_note"]:
+            audio_file = update.message[source]
         else:
-            output_text = f'Розшифровка аудіо:\n`\n{transcription}\n`'
-
-        # Обмежуємо розмір transcription для callback_data
-        max_callback_data_length = 64  # Telegram обмежує callback_data до 64 байтів
-        truncated_transcription = transcription[:max_callback_data_length]
+            raise ValueError(f"Невідомий тип джерела аудіо: {source}")
         
-        # Створюємо кнопку для відправки розшифрованого тексту боту
-        keyboard = [[InlineKeyboardButton("Відправити боту", callback_data=f"send_to_bot:{truncated_transcription}")]]
+        file = await context.bot.getFile(audio_file.file_id)
+        audio_path = os.path.join(temp_dir, f'{audio_file.file_id}.ogg')
+        await file.download(audio_path)
+    
+    try:
+        transcription_generator = transcribe_audio(audio_path, user_settings['LANGUAGE'])
+        transcription = await send_streaming_message(update, context, transcription_generator)
+        
+        if transcription.startswith("Помилка:"):
+            await update.message.reply_text(transcription)
+            return
+
+        if user_settings['ENABLE_POSTPROCESSING']:
+            transcription = postprocess_text(transcription)
+
+        message_id = f"{source}_{user_id}_{int(time.time())}"
+        if 'transcriptions' not in context.bot_data:
+            context.bot_data['transcriptions'] = {}
+        context.bot_data['transcriptions'][message_id] = transcription
+        
+        keyboard = [[InlineKeyboardButton("Відправити боту", callback_data=f"send_to_bot:{message_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Відправляємо повідомлення з обмеженим текстом, якщо він занадто довгий
-        max_message_length = 4096
-        if len(output_text) > max_message_length:
-            chunks = [output_text[i:i+max_message_length] for i in range(0, len(output_text), max_message_length)]
-            for i, chunk in enumerate(chunks):
-                if i == 0:
-                    update.message.reply_text(chunk, reply_to_message_id=update.message.message_id, 
-                                              parse_mode='Markdown', reply_markup=reply_markup)
-                else:
-                    update.message.reply_text(chunk, parse_mode='Markdown')
-        else:
-            update.message.reply_text(output_text, reply_to_message_id=update.message.message_id, 
-                                      parse_mode='Markdown', reply_markup=reply_markup)
-
+        await update.message.reply_text(
+            f'`{transcription}`',
+            reply_to_message_id=update.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    
     except Exception as e:
-        logger.error(f"Помилка при обробці аудіо: {str(e)}")
-        update.message.reply_text("Виникла помилка при обробці аудіо. Будь ласка, спробуйте ще раз.")
+        logger.error(f"Помилка при обробці {source}: {str(e)}", exc_info=True)
+        await update.message.reply_text(f"Виникла помилка при обробці {source}. Будь ласка, спробуйте ще раз.")
     finally:
         cleanup_temp_files(audio_path)
 
@@ -113,104 +125,65 @@ def extract_audio_from_video(video_path: str, audio_path: str) -> None:
 def handle_video(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
-    user = update.effective_user
-    chat = update.effective_chat
-
-    user_info = f"User: {user.first_name} {user.last_name or ''} (@{user.username or 'No username'}, ID: {user.id})"
-    chat_info = f"Chat: {chat.title or 'Private'} (@{chat.username or 'No username'}, ID: {chat.id})"
     
     if not user_settings['ENABLE_VIDEO_PROCESSING']:
-        logger.info(f"Обробка відео вимкнена. {user_info}, {chat_info}")
         update.message.reply_text("Обробка відео вимкнена в налаштуваннях.")
         return
 
-    logger.info(f"Отримано відео від користувача. {user_info}, {chat_info}")
-    
     video = update.message.video
-    file = context.bot.get_file(video.file_id)
-    
     video_path = os.path.join(temp_dir, f'{video.file_id}.mp4')
     audio_path = os.path.join(temp_dir, f'{video.file_id}.ogg')
 
     try:
-        # Спроба завантажити файл з кількома повторами
-        for attempt in range(3):
-            try:
-                file.download(video_path)
-                logger.info(f"Відео завантажено: {video_path}")
-                break
-            except Exception as e:
-                logger.warning(f"Спроба {attempt + 1} завантажити файл не вдалася: {e}")
-                time.sleep(1)  # Чекаємо секунду перед повторною спробою
-        else:
-            raise Exception("Не вдалося завантажити файл після кількох спроб")
-
+        file = context.bot.get_file(video.file_id)
+        file.download(video_path)
+        logger.info(f"Відео завантажено: {video_path}")
+        
         # Витягуємо аудіо з відео
         extract_audio_from_video(video_path, audio_path)
         logger.info(f"Аудіо витягнуто з відео: {audio_path}")
-
+        
         # Обробляємо аудіо
-        handle_audio(update, context, audio_path)
+        handle_audio(update, context, audio_path, source="video")
 
     except Exception as e:
-        logger.error(f"Помилка при обробці відео: {e}")
+        logger.error(f"Помилка при обробці відео: {e}", exc_info=True)
         update.message.reply_text("Виникла помилка при обробці відео. Будь ласка, спробуйте ще раз.")
 
     finally:
         cleanup_temp_files(video_path, audio_path)
-                
+
 def handle_video_note(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
-    user = update.effective_user
-    chat = update.effective_chat
-
-    user_info = f"User: {user.first_name} {user.last_name or ''} (@{user.username or 'No username'}, ID: {user.id})"
-    chat_info = f"Chat: {chat.title or 'Private'} (@{chat.username or 'No username'}, ID: {chat.id})"
     
     if not user_settings['ENABLE_VIDEO_NOTE_PROCESSING']:
-        logger.info(f"Обробка відеоповідомлень вимкнена. {user_info}, {chat_info}")
+        update.message.reply_text("Обробка відеоповідомлень вимкнена в налаштуваннях.")
         return
 
-    logger.info(f"Отримано відеоповідомлення. {user_info}, {chat_info}")
     video_note = update.message.video_note
-    file = context.bot.get_file(video_note.file_id)
-    
     video_note_path = os.path.join(temp_dir, f'{video_note.file_id}.mp4')
     audio_path = os.path.join(temp_dir, f'{video_note.file_id}.ogg')
 
     try:
-        # Спроба завантажити файл з кількома повторами
-        for attempt in range(3):
-            try:
-                file.download(video_note_path)
-                logger.info(f"Відеоповідомлення завантажено: {video_note_path}")
-                break
-            except Exception as e:
-                logger.warning(f"Спроба {attempt + 1} завантажити файл не вдалася: {e}")
-                if attempt < 2:  # Якщо це не остання спроба
-                    time.sleep(1)  # Чекаємо секунду перед повторною спробою
-        else:
-            raise Exception("Не вдалося завантажити файл після кількох спроб")
-
-        # Витягуємо аудіо з відео
+        file = context.bot.get_file(video_note.file_id)
+        file.download(video_note_path)
+        logger.info(f"Відео-нотатка завантажена: {video_note_path}")
+        
+        # Витягуємо аудіо з відео-нотатки
         extract_audio_from_video(video_note_path, audio_path)
-        logger.info(f"Аудіо витягнуто з відеоповідомлення: {audio_path}")
-
+        logger.info(f"Аудіо витягнуто з відео-нотатки: {audio_path}")
+        
         # Обробляємо аудіо
-        handle_audio(update, context, audio_path)
+        handle_audio(update, context, audio_path, source="video_note")
 
     except Exception as e:
-        logger.error(f"Помилка при обробці відеоповідомлення: {e}")
-        error_message = escape_markdown(str(e))
-        update.message.reply_text(
-            f"Виникла помилка при обробці відеоповідомлення: `{error_message}`\. Будь ласка, спробуйте ще раз\.",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+        logger.error(f"Помилка при обробці відеоповідомлення: {e}", exc_info=True)
+        update.message.reply_text("Виникла помилка при обробці відеоповідомлення. Будь ласка, спробуйте ще раз.")
 
     finally:
         cleanup_temp_files(video_note_path, audio_path)
-
+                
 def extract_audio_from_video(video_path: str, audio_path: str) -> None:
     try:
         video = VideoFileClip(video_path)
@@ -263,9 +236,6 @@ def handle_message(update: Update, context: CallbackContext) -> None:
 
     text = message.text or message.caption
     
-    if text:
-        logger.debug(f"Текст повідомлення: {text}")
-
     if text == "Меню":
         settings_menu(update, context)
         return
@@ -387,7 +357,9 @@ def handle_message(update: Update, context: CallbackContext) -> None:
             image_file.download(image_path)
             logger.debug(f"Зображення завантажено: {image_path}")
         
-        if not text and not image_path:
+        if text or image_path:
+            analyze_and_respond(update, context, text, image_path)
+        else:
             update.message.reply_text("Будь ласка, надайте текст або зображення для аналізу.")
             return
 
@@ -395,7 +367,7 @@ def handle_message(update: Update, context: CallbackContext) -> None:
     
     else:
         logger.debug(f"Повідомлення не є запитом до бота. {user_info}, {chat_info}")
-
+        
 def cleanup_temp_files(*file_paths):
     for file_path in file_paths:
         try:
@@ -405,97 +377,11 @@ def cleanup_temp_files(*file_paths):
         except Exception as e:
             logger.error(f"Не вдалося видалити файл {file_path}: {e}")
 
-import os
-import time
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackContext
-from moviepy.editor import VideoFileClip
-import re
-
-# Спробуємо імпортувати ParseMode з різних місць
-try:
-    from telegram import ParseMode
-except ImportError:
-    try:
-        from telegram.constants import ParseMode
-    except ImportError:
-        from telegram.parsemode import ParseMode
-
-from .transcription import transcribe_audio, postprocess_text
-from .settings_handler import get_user_settings
-from .context_manager import context_manager
-
-# Налаштування логування
-logger = logging.getLogger(__name__)
-
-# Глобальне визначення temp_dir
-temp_dir = os.path.join(os.getcwd(), 'temp')
-os.makedirs(temp_dir, exist_ok=True)
-
 def escape_markdown(text):
     """Функція для екранування спеціальних символів у Markdown V2"""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
-
-def handle_audio(update: Update, context: CallbackContext, audio_path: str = None) -> None:
-    user_id = update.effective_user.id
-    user_settings = get_user_settings(context, user_id)
-    user = update.effective_user
-    chat = update.effective_chat
-
-    user_info = f"User: {user.first_name} {user.last_name or ''} (@{user.username or 'No username'}, ID: {user.id})"
-    chat_info = f"Chat: {chat.title or 'Private'} (@{chat.username or 'No username'}, ID: {chat.id})"
-    
-    logger.info(f"Отримано аудіофайл від користувача. {user_info}, {chat_info}")
-    
-    if not audio_path:
-        audio_file = update.message.audio or update.message.voice
-        file = context.bot.getFile(audio_file.file_id)
-        audio_path = os.path.join(temp_dir, f'{audio_file.file_id}.ogg')
-        file.download(audio_path)
-        logger.info(f"Файл завантажено для обробки: {audio_path}")
-
-    try:
-        transcription = transcribe_audio(audio_path, user_settings['LANGUAGE'])
-        
-        if user_settings['ENABLE_POSTPROCESSING']:
-            postprocessed_text = postprocess_text(transcription)
-            output_text = f'Розшифровка аудіо (після обробки):\n\n`{postprocessed_text}`'
-        else:
-            output_text = f'Розшифровка аудіо:\n\n`{transcription}`'
-
-        # Створюємо унікальний ідентифікатор для цього повідомлення
-        message_id = f"audio_{user_id}_{int(time.time())}"
-        
-        # Зберігаємо транскрипцію в контексті бота для подальшого використання
-        if 'transcriptions' not in context.bot_data:
-            context.bot_data['transcriptions'] = {}
-        context.bot_data['transcriptions'][message_id] = transcription
-
-        keyboard = [[InlineKeyboardButton("Відправити боту", callback_data=f"send_to_bot:{message_id}")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        # Відправляємо повідомлення з обмеженим текстом, якщо він занадто довгий
-        max_message_length = 4096
-        if len(output_text) > max_message_length:
-            chunks = [output_text[i:i+max_message_length] for i in range(0, len(output_text), max_message_length)]
-            for i, chunk in enumerate(chunks):
-                if i == 0:
-                    update.message.reply_text(chunk, reply_to_message_id=update.message.message_id, 
-                                              parse_mode='Markdown', reply_markup=reply_markup)
-                else:
-                    update.message.reply_text(chunk, parse_mode='Markdown')
-        else:
-            update.message.reply_text(output_text, reply_to_message_id=update.message.message_id, 
-                                      parse_mode='Markdown', reply_markup=reply_markup)
-
-    except Exception as e:
-        logger.error(f"Помилка при обробці аудіо: {str(e)}")
-        update.message.reply_text("Виникла помилка при обробці аудіо. Будь ласка, спробуйте ще раз.")
-    finally:
-        cleanup_temp_files(audio_path)
-
+                        
 def analyze_and_respond(update: Update, context: CallbackContext, text: str, image_path: str = None):
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
@@ -557,13 +443,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
 
     # Видаляємо кнопку після її використання
     try:
-        current_reply_markup = query.message.reply_markup
-        if current_reply_markup and current_reply_markup.inline_keyboard:
-            context.bot.edit_message_reply_markup(
-                chat_id=query.message.chat_id,
-                message_id=query.message.message_id,
-                reply_markup=None
-            )
+        query.edit_message_reply_markup(reply_markup=None)
     except Exception as e:
         logger.error(f"Не вдалося видалити кнопку: {e}")
         

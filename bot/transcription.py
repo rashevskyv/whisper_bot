@@ -1,3 +1,12 @@
+import sys
+import os
+
+# Додаємо батьківську директорію до шляху пошуку модулів
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import GPT_SETTINGS, MESSAGES
+
+# Решта імпортів та коду залишається без змін
 import requests
 import logging
 from tokens import WHISPER_API_KEY, GPT_API_KEY
@@ -8,7 +17,7 @@ import base64
 
 logger = logging.getLogger(__name__)
 
-def transcribe_audio(file_path: str, language: str) -> str:
+def transcribe_audio(file_path: str, language: str):
     logger.info(f"Розшифровка аудіо з файлу: {file_path} мовою: {language}")
     url = "https://api.openai.com/v1/audio/transcriptions"
     headers = {
@@ -18,58 +27,68 @@ def transcribe_audio(file_path: str, language: str) -> str:
         files = {
             'file': audio_file,
             'model': (None, 'whisper-1'),
-            'language': (None, language)  # Вибір мови
+            'language': (None, language)
         }
-        response = requests.post(url, headers=headers, files=files)
-        response_data = response.json()
-        logger.info(f"Відповідь від Whisper API: {response_data}")
-        return response_data.get('text', 'Не вдалося розшифрувати аудіо.')
-
+        with requests.post(url, headers=headers, files=files, stream=True) as response:
+            response.raise_for_status()
+            # Читаємо всю відповідь разом
+            full_response = response.text
+            try:
+                response_json = json.loads(full_response)
+                if 'text' in response_json:
+                    yield response_json['text']
+                else:
+                    logger.error(f"Неочікувана структура відповіді: {response_json}")
+                    yield "Помилка: неочікувана структура відповіді від API."
+            except json.JSONDecodeError:
+                logger.error(f"Не вдалося розпарсити JSON. Відповідь: {full_response}")
+                yield f"Помилка: не вдалося розпарсити відповідь від API. Відповідь: {full_response[:100]}..."
+                
 def postprocess_text(text: str) -> str:
-    logger.info(f"Постобробка тексту через GPT-3.5 Turbo")
+    logger.info(f"Постобробка тексту через GPT")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
         'Content-Type': 'application/json'
     }
     messages = [
-        {'role': 'system', 'content': 'Ви є помічником, який допомагає виправляти текст.'},
-        {'role': 'user', 'content': f"Виправте граматичні помилки в цьому тексті, але не змінюйте його зміст. Починай текст одразу:\n\n{text}"}
+        {'role': 'system', 'content': MESSAGES['postprocess']['system']},
+        {'role': 'user', 'content': MESSAGES['postprocess']['user'].format(text=text)}
     ]
     
     data = {
-        'model': 'gpt-3.5-turbo',
+        'model': GPT_SETTINGS['postprocess']['model'],
         'messages': messages,
-        'max_tokens': 1500,
-        'temperature': 0.5
+        'max_tokens': GPT_SETTINGS['postprocess']['max_tokens'],
+        'temperature': GPT_SETTINGS['postprocess']['temperature']
     }
     
     response = requests.post(url, headers=headers, json=data)
     response_data = response.json()
-    logger.info(f"Відповідь від GPT-3.5 Turbo API: {response_data}")
+    logger.info(f"Відповідь від GPT API: {response_data}")
     
     if 'choices' in response_data and len(response_data['choices']) > 0:
         return response_data['choices'][0]['message']['content'].strip()
     else:
-        return 'Не вдалося обробити текст через GPT-3.5 Turbo.'
+        return 'Не вдалося обробити текст через GPT.'
 
 def summarize_text(text: str):
-    logger.info(f"Резюмування тексту через GPT-4 зі стрімінгом")
+    logger.info(f"Резюмування тексту через GPT зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
         'Content-Type': 'application/json'
     }
     messages = [
-        {'role': 'system', 'content': 'Ви є помічником, який допомагає створювати резюме тексту.'},
-        {'role': 'user', 'content': f"Зробіть стисле резюме наступного тексту:\n\n{text}"}
+        {'role': 'system', 'content': MESSAGES['summarize']['system']},
+        {'role': 'user', 'content': MESSAGES['summarize']['user'].format(text=text)}
     ]
     
     data = {
-        'model': 'gpt-4',
+        'model': GPT_SETTINGS['summarize']['model'],
         'messages': messages,
-        'max_tokens': 150,
-        'temperature': 0.7,
+        'max_tokens': GPT_SETTINGS['summarize']['max_tokens'],
+        'temperature': GPT_SETTINGS['summarize']['temperature'],
         'stream': True
     }
     
@@ -93,22 +112,22 @@ def summarize_text(text: str):
         yield f"Виникла помилка при резюмуванні тексту: {str(e)}"
 
 def rewrite_text(text: str):
-    logger.info(f"Переписування тексту через GPT-4 зі стрімінгом")
+    logger.info(f"Переписування тексту через GPT зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
         'Content-Type': 'application/json'
     }
     messages = [
-        {'role': 'system', 'content': 'Ви є помічником, який допомагає переписувати текст у іншому стилі.'},
-        {'role': 'user', 'content': f"Перепишіть цей текст, зберігаючи основний зміст, але змінюючи стиль та формулювання:\n\n{text}"}
+        {'role': 'system', 'content': MESSAGES['rewrite']['system']},
+        {'role': 'user', 'content': MESSAGES['rewrite']['user'].format(text=text)}
     ]
     
     data = {
-        'model': 'gpt-4',
+        'model': GPT_SETTINGS['rewrite']['model'],
         'messages': messages,
-        'max_tokens': 1500,
-        'temperature': 0.7,
+        'max_tokens': GPT_SETTINGS['rewrite']['max_tokens'],
+        'temperature': GPT_SETTINGS['rewrite']['temperature'],
         'stream': True
     }
     
@@ -130,69 +149,63 @@ def rewrite_text(text: str):
     except Exception as e:
         logger.error(f"Помилка при переписуванні тексту: {e}")
         yield f"Виникла помилка при переписуванні тексту: {str(e)}"
-    
+
 def query_gpt4(text: str) -> str:
-    logger.info(f"Запит до GPT-4")
+    logger.info(f"Запит до GPT")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
         'Content-Type': 'application/json'
     }
     messages = [
-        {'role': 'system', 'content': 'Ви є корисним асистентом.'},
-        {'role': 'user', 'content': text}
+        {'role': 'system', 'content': MESSAGES['query']['system']},
+        {'role': 'user', 'content': MESSAGES['query']['user'].format(text=text)}
     ]
     
     data = {
-        'model': 'gpt-4',
+        'model': GPT_SETTINGS['query']['model'],
         'messages': messages,
-        'max_tokens': 1500,
-        'temperature': 0.7
+        'max_tokens': GPT_SETTINGS['query']['max_tokens'],
+        'temperature': GPT_SETTINGS['query']['temperature']
     }
     
     response = requests.post(url, headers=headers, json=data)
     response_data = response.json()
-    logger.info(f"Відповідь від GPT-4 API: {response_data}")
+    logger.info(f"Відповідь від GPT API: {response_data}")
     
     if 'choices' in response_data and len(response_data['choices']) > 0:
         return response_data['choices'][0]['message']['content'].strip()
     else:
-        return 'Не вдалося отримати відповідь від GPT-4.'
-
-def query_claude(text: str) -> str:
-    logger.info(f"Запит до Claude (заглушка)")
-    # Це заглушка, яку ми замінимо справжньою реалізацією пізніше
-    return "Це заглушка для відповіді від Claude. Справжня реалізація буде додана пізніше."
+        return 'Не вдалося отримати відповідь від GPT.'
 
 def query_gpt4_stream(text: str):
-    logger.info(f"Запит до GPT-4 зі стрімінгом")
+    logger.info(f"Запит до GPT зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
         'Content-Type': 'application/json'
     }
 
-    # Розділяємо цитоване повідомлення та запит користувача
     quoted_message = re.search(r'<quoted_message>(.*?)</quoted_message>', text, re.DOTALL)
     if quoted_message:
         quoted_text = quoted_message.group(1)
         user_query = text.replace(quoted_message.group(0), '').strip()
         messages = [
-            {'role': 'system', 'content': 'Ви є корисним асистентом.'},
+            {'role': 'system', 'content': MESSAGES['query']['system']},
             {'role': 'user', 'content': f"Цитоване повідомлення: {quoted_text}"},
             {'role': 'user', 'content': f"Мій запит: {user_query}"}
         ]
     else:
         messages = [
-            {'role': 'system', 'content': 'Ви є корисним асистентом.'},
-            {'role': 'user', 'content': text}
+            {'role': 'system', 'content': MESSAGES['query']['system']},
+            {'role': 'user', 'content': MESSAGES['query']['user'].format(text=text)}
         ]
     
     data = {
-        'model': 'gpt-4o',
+        'model': GPT_SETTINGS['query']['model'],
         'messages': messages,
-        'max_tokens': 1500,
-        'temperature': 0.7,
+        'max_tokens': GPT_SETTINGS['query']['max_tokens'],
+        'temperature': GPT_SETTINGS['query']['temperature'],
         'stream': True
     }
     
@@ -211,12 +224,6 @@ def query_gpt4_stream(text: str):
         else:
             break
 
-def query_claude_stream(text: str):
-    logger.info(f"Запит до Claude зі стрімінгом (заглушка)")
-    # Це заглушка, яку ми замінимо справжньою реалізацією пізніше
-    yield "Це заглушка для відповіді від Claude зі стрімінгом. "
-    yield "Справжня реалізація буде додана пізніше."
-
 def analyze_image(image_path: str, prompt: str):
     logger.info(f"Аналіз зображення: {image_path}")
     url = "https://api.openai.com/v1/chat/completions"
@@ -226,7 +233,6 @@ def analyze_image(image_path: str, prompt: str):
     }
 
     try:
-        # Кодуємо зображення в base64
         with open(image_path, "rb") as image_file:
             encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
 
@@ -249,9 +255,10 @@ def analyze_image(image_path: str, prompt: str):
         ]
 
         data = {
-            'model': 'gpt-4o',
+            'model': GPT_SETTINGS['analyze_content']['model'],
             'messages': messages,
-            'max_tokens': 1000,
+            'max_tokens': GPT_SETTINGS['analyze_content']['max_tokens'],
+            'temperature': GPT_SETTINGS['analyze_content']['temperature']
         }
 
         response = requests.post(url, headers=headers, json=data)
@@ -283,13 +290,13 @@ def analyze_content(text: str = None, image_path: str = None, conversation_conte
     }
 
     try:
-        messages = [{"role": "system", "content": "Ви - помічник, здатний аналізувати текст та зображення."}]
+        messages = [{"role": "system", "content": MESSAGES['analyze_content']['system']}]
 
         if conversation_context:
             messages.extend(conversation_context)
 
         if text:
-            messages.append({"role": "user", "content": text})
+            messages.append({"role": "user", "content": MESSAGES['analyze_content']['user_text'].format(text=text)})
 
         if image_path:
             with open(image_path, "rb") as image_file:
@@ -298,7 +305,7 @@ def analyze_content(text: str = None, image_path: str = None, conversation_conte
             image_message = {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Аналіз цього зображення:"},
+                    {"type": "text", "text": MESSAGES['analyze_content']['user_image']},
                     {
                         "type": "image_url",
                         "image_url": {
@@ -313,9 +320,10 @@ def analyze_content(text: str = None, image_path: str = None, conversation_conte
             raise ValueError("Потрібно надати текст, зображення або контекст для аналізу")
 
         data = {
-            'model': 'gpt-4o',  # Використовуємо актуальну модель для аналізу зображень
+            'model': GPT_SETTINGS['analyze_content']['model'],
             'messages': messages,
-            'max_tokens': 1000,
+            'max_tokens': GPT_SETTINGS['analyze_content']['max_tokens'],
+            'temperature': GPT_SETTINGS['analyze_content']['temperature'],
         }
 
         logger.debug(f"Відправка запиту до OpenAI API. Заголовки: {headers}, Дані: {data}")
@@ -342,3 +350,9 @@ def analyze_content(text: str = None, image_path: str = None, conversation_conte
     except Exception as e:
         logger.error(f"Неочікувана помилка: {str(e)}")
         yield f"Виникла неочікувана помилка: {str(e)}"
+
+# Додаткові допоміжні функції можуть бути додані тут за потреби
+
+if __name__ == "__main__":
+    # Тут можна додати код для тестування функцій модуля
+    pass
