@@ -20,7 +20,6 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 async def transcribe_audio(file_path: str, language: str):
-    logger.info(f"Початок розшифровки аудіо з файлу: {file_path} мовою: {language}")
     url = "https://api.openai.com/v1/audio/transcriptions"
     headers = {
         'Authorization': f'Bearer {WHISPER_API_KEY}'
@@ -32,13 +31,10 @@ async def transcribe_audio(file_path: str, language: str):
             form.add_field('model', 'whisper-1')
             form.add_field('language', language)
 
-            logger.info("Відправка запиту на транскрибацію до API")
             async with session.post(url, headers=headers, data=form) as response:
                 response.raise_for_status()
-                logger.info("Отримано відповідь від API")
                 response_json = await response.json()
                 if 'text' in response_json:
-                    logger.info("Успішно отримано текст транскрипції")
                     yield response_json['text']
                 else:
                     logger.error(f"Неочікувана структура відповіді: {response_json}")
@@ -54,7 +50,6 @@ async def transcribe_audio(file_path: str, language: str):
         yield f"Неочікувана помилка при транскрибації: {str(e)}"
 
 async def postprocess_text(text: str) -> str:
-    logger.info(f"Постобробка тексту через GPT")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
@@ -76,7 +71,6 @@ async def postprocess_text(text: str) -> str:
         async with session.post(url, headers=headers, json=data) as response:
             response_data = await response.json()
     
-    logger.info(f"Відповідь від GPT API: {response_data}")
     
     if 'choices' in response_data and len(response_data['choices']) > 0:
         return response_data['choices'][0]['message']['content'].strip()
@@ -84,7 +78,6 @@ async def postprocess_text(text: str) -> str:
         return 'Не вдалося обробити текст через GPT.'
     
 async def summarize_text(text: str):
-    logger.info(f"Резюмування тексту через GPT зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
@@ -122,7 +115,6 @@ async def summarize_text(text: str):
         yield f"Виникла помилка при резюмуванні тексту: {str(e)}"
 
 async def rewrite_text(text: str):
-    logger.info(f"Переписування тексту через GPT зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
@@ -160,7 +152,6 @@ async def rewrite_text(text: str):
         yield f"Виникла помилка при переписуванні тексту: {str(e)}"
         
 def query_gpt4(text: str) -> str:
-    logger.info(f"Запит до GPT")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
@@ -180,7 +171,6 @@ def query_gpt4(text: str) -> str:
     
     response = requests.post(url, headers=headers, json=data)
     response_data = response.json()
-    logger.info(f"Відповідь від GPT API: {response_data}")
     
     if 'choices' in response_data and len(response_data['choices']) > 0:
         return response_data['choices'][0]['message']['content'].strip()
@@ -188,7 +178,6 @@ def query_gpt4(text: str) -> str:
         return 'Не вдалося отримати відповідь від GPT.'
 
 async def query_gpt4_stream(text: str):
-    logger.info(f"Запит до GPT зі стрімінгом")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
@@ -224,16 +213,19 @@ async def query_gpt4_stream(text: str):
                 if line:
                     try:
                         json_response = json.loads(line.decode('utf-8').split('data: ')[1])
-                        content = json_response['choices'][0]['delta'].get('content', '')
-                        if content:
-                            yield content
+                        if 'choices' in json_response and len(json_response['choices']) > 0:
+                            content = json_response['choices'][0].get('delta', {}).get('content', '')
+                            if content:
+                                yield content
                     except json.JSONDecodeError:
                         continue
+                    except IndexError:
+                        # Ігноруємо цю помилку, оскільки вона може виникати при завершенні потоку
+                        continue
                     except Exception as e:
-                        logger.error(f"Помилка при обробці відповіді: {e}")
+                        logger.error(f"Unexpected error when processing response: {str(e)}")
 
 def analyze_image(image_path: str, prompt: str):
-    logger.info(f"Аналіз зображення: {image_path}")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
@@ -284,7 +276,6 @@ def analyze_image(image_path: str, prompt: str):
         
         if 'choices' in response_data and len(response_data['choices']) > 0:
             content = response_data['choices'][0]['message']['content']
-            logger.info("Успішно отримано аналіз зображення")
             yield content
         else:
             logger.error(f"Неочікувана відповідь API: {response_data}")
@@ -298,7 +289,7 @@ def analyze_image(image_path: str, prompt: str):
         yield f"Виникла помилка при аналізі зображення: {str(e)}"
 
 async def analyze_content(text: str = None, image_path: str = None, conversation_context: list = None):
-    logger.info(f"Аналіз контенту: текст {'присутній' if text else 'відсутній'}, зображення {'присутнє' if image_path else 'відсутнє'}, контекст {'присутній' if conversation_context else 'відсутній'}")
+    logger.info(f"Starting content analysis: text {'present' if text else 'absent'}, image {'present' if image_path else 'absent'}")
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         'Authorization': f'Bearer {GPT_API_KEY}',
@@ -345,22 +336,39 @@ async def analyze_content(text: str = None, image_path: str = None, conversation
 
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=data) as response:
+                buffer = ""
                 async for line in response.content:
                     if line:
-                        try:
-                            json_response = json.loads(line.decode('utf-8').split('data: ')[1])
-                            content = json_response['choices'][0]['delta'].get('content', '')
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
-                            continue
-                        except Exception as e:
-                            logger.error(f"Помилка при обробці відповіді: {e}")
+                        buffer += line.decode('utf-8')
+                        if buffer.endswith('\n'):
+                            lines = buffer.strip().split('\n')
+                            for line_str in lines:
+                                if line_str.strip():  # Ignore empty lines
+                                    try:
+                                        if line_str.startswith('data: '):
+                                            json_str = line_str[6:]  # Remove 'data: ' prefix
+                                            if json_str == '[DONE]':
+                                                break
+                                            json_response = json.loads(json_str)
+                                            if 'choices' in json_response and len(json_response['choices']) > 0:
+                                                delta = json_response['choices'][0].get('delta', {})
+                                                content = delta.get('content', '')
+                                                if content:
+                                                    yield content
+                                            else:
+                                                logger.warning(f"Unexpected JSON structure: {json_response}")
+                                        else:
+                                            logger.warning(f"Unexpected line format: {line_str}")
+                                    except json.JSONDecodeError as json_err:
+                                        logger.error(f"JSON decode error: {str(json_err)}, Line: {line_str}")
+                                    except Exception as e:
+                                        logger.error(f"Error processing response: {str(e)}, Line: {line_str}")
+                            buffer = ""
 
     except Exception as e:
-        logger.error(f"Помилка при аналізі контенту: {str(e)}")
-        yield f"Виникла помилка при аналізі контенту: {str(e)}"
-
+        logger.error(f"Error in analyze_content: {str(e)}", exc_info=True)
+        yield f"An error occurred while analyzing the content: {str(e)}"
+                        
 # Додаткові допоміжні функції можуть бути додані тут за потреби
 
 if __name__ == "__main__":

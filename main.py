@@ -15,8 +15,10 @@ from telegram import Update
 # Налаштування логування
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG
+    level=logging.INFO
 )
+logging.getLogger('httpcore').setLevel(logging.CRITICAL)
+logging.getLogger('httpx').setLevel(logging.CRITICAL)
 logger = logging.getLogger(__name__)
 
 def setup_application():
