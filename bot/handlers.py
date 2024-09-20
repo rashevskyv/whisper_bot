@@ -14,7 +14,6 @@ from moviepy.editor import VideoFileClip
 
 logger = logging.getLogger(__name__)
 
-# Глобальне визначення temp_dir
 temp_dir = os.path.join(os.getcwd(), 'temp')
 os.makedirs(temp_dir, exist_ok=True)
 
@@ -153,12 +152,23 @@ def extract_audio_from_video(video_path: str, audio_path: str) -> None:
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_settings = get_user_settings(context, user_id)
+    chat_type = update.effective_chat.type
     
-    if not user_settings['ENABLE_VIDEO_PROCESSING']:
-        await update.message.reply_text("Обробка відео вимкнена в налаштуваннях.")
-        return
+    if chat_type in ['group', 'supergroup']:
+        # Перевіряємо, чи є це відповіддю на відео і чи починається текст зі слова "Бот"
+        if not (update.message.reply_to_message and 
+                update.message.reply_to_message.video and 
+                update.message.text and 
+                update.message.text.lower().startswith("бот")):
+            return  # Якщо умови не виконуються, виходимо з функції
+        # Використовуємо відео з цитованого повідомлення
+        video = update.message.reply_to_message.video
+    else:  # Для приватних чатів
+        if not user_settings['ENABLE_VIDEO_PROCESSING']:
+            await update.message.reply_text("Обробка відео вимкнена в налаштуваннях.")
+            return
+        video = update.message.video
 
-    video = update.message.video
     video_path = os.path.join(temp_dir, f'{video.file_id}.mp4')
     audio_path = os.path.join(temp_dir, f'{video.file_id}.ogg')
 
@@ -240,14 +250,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.info("Викликано меню налаштувань")
             await settings_menu(update, context)
             return
-                
-        # Функція для перевірки наявності ключових слів резюмування
-        def is_summarize_command(text, chat_type):
-            summarize_keywords = r'\b(резюме|підсумуй|резюмуй|підсумок)\w*'
-            if chat_type == 'private':
-                return re.search(summarize_keywords, text.lower())
-            else:
-                return re.search(r'\bбот\W+.*' + summarize_keywords, text.lower())
 
         # Обробка аудіо повідомлень
         if message.voice or message.audio:
@@ -276,111 +278,142 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Обробка цитованих повідомлень
         if message.reply_to_message:
             logger.debug("Виявлено цитоване повідомлення")
-            original_message = message.reply_to_message.text or message.reply_to_message.caption
-            if original_message:
-                logger.debug(f"Текст цитованого повідомлення: {original_message}")
-                
-                if is_summarize_command(text, chat_type):
-                    logger.info("Запит на резюмування цитованого повідомлення")
-                    if user_settings['ENABLE_SUMMARIZATION']:
-                        bot_message = await message.reply_text("Створюю резюме...", parse_mode=ParseMode.MARKDOWN)
-                        full_response = ""
-                        async for chunk in summarize_text(original_message):
-                            full_response += chunk
-                            if len(full_response) % 100 == 0:
-                                try:
-                                    await context.bot.edit_message_text(
-                                        chat_id=update.effective_chat.id,
-                                        message_id=bot_message.message_id,
-                                        text=f'Резюме:\n`\n{full_response}\n`',
-                                        parse_mode=ParseMode.MARKDOWN
-                                    )
-                                except Exception as e:
-                                    logger.error(f"Помилка при оновленні повідомлення: {e}")
-                        try:
-                            await context.bot.edit_message_text(
-                                chat_id=update.effective_chat.id,
-                                message_id=bot_message.message_id,
-                                text=f'Резюме:\n`\n{full_response}\n`',
-                                parse_mode=ParseMode.MARKDOWN
-                            )
-                        except Exception as e:
-                            logger.error(f"Помилка при відправці фінального повідомлення: {e}")
-                    else:
-                        await update.message.reply_text("Функція резюмування вимкнена в налаштуваннях.")
-                    return
-
-                elif "перепиши" in text.lower():
-                    logger.info("Запит на переписування цитованого повідомлення")
-                    if user_settings['ENABLE_REWRITING']:
-                        bot_message = await message.reply_text("Переписую текст...", parse_mode=ParseMode.MARKDOWN)
-                        full_response = ""
-                        async for chunk in rewrite_text(original_message):
-                            full_response += chunk
-                            if len(full_response) % 100 == 0:
-                                try:
-                                    await context.bot.edit_message_text(
-                                        chat_id=update.effective_chat.id,
-                                        message_id=bot_message.message_id,
-                                        text=f'Переписаний текст:\n`\n{full_response}\n`',
-                                        parse_mode=ParseMode.MARKDOWN
-                                    )
-                                except Exception as e:
-                                    logger.error(f"Помилка при оновленні повідомлення: {e}")
-                        try:
-                            await context.bot.edit_message_text(
-                                chat_id=update.effective_chat.id,
-                                message_id=bot_message.message_id,
-                                text=f'Переписаний текст:\n`\n{full_response}\n`',
-                                parse_mode=ParseMode.MARKDOWN
-                            )
-                        except Exception as e:
-                            logger.error(f"Помилка при відправці фінального повідомлення: {e}")
-                    else:
-                        await update.message.reply_text("Функція переписування вимкнена в налаштуваннях.")
-                    return
-                
-        # Обробка звичайних повідомлень
-        should_process = (
-            (chat_type == 'private') or
-            (chat_type in ['group', 'supergroup'] and text and text.lower().startswith("бот"))
-        )
-
-        if should_process:
-            logger.info(f"Обробка повідомлення: {text[:50] if text else 'Зображення без тексту'}...")
-            if chat_type in ['group', 'supergroup'] and text and text.lower().startswith("бот"):
-                text = text[3:].strip()
-
-            image_path = None
-            if message.photo:
-                logger.debug(f"Виявлено зображення в поточному повідомленні. {user_info}, {chat_info}")
-                image_file = await message.photo[-1].get_file()
-                image_path = os.path.join(temp_dir, f'{image_file.file_id}.jpg')
-                logger.debug(f"Спроба завантаження зображення: {image_path}")
-                try:
-                    await image_file.download_to_drive(image_path)
-                    logger.debug(f"Зображення успішно завантажено: {image_path}")
-                except Exception as e:
-                    logger.error(f"Помилка при завантаженні зображення: {e}", exc_info=True)
-                    await update.message.reply_text("Виникла помилка при завантаженні зображення. Будь ласка, спробуйте ще раз.")
-                    return
+            quoted_message = message.reply_to_message
             
-            if text or image_path:
-                try:
-                    response_generator = analyze_content(text, image_path, context_manager.get_context(user_id) if user_settings['ENABLE_CONTEXT'] else None)
-                    await send_streaming_message(update, context, response_generator)
-                except Exception as e:
-                    logger.error(f"Помилка в analyze_and_respond: {e}", exc_info=True)
-                    await update.message.reply_text("Виникла помилка при аналізі вашого запиту. Будь ласка, спробуйте ще раз.")
+            # Визначаємо тип цитованого контенту
+            if quoted_message.text:
+                content_type = "text"
+                content = quoted_message.text
+            elif quoted_message.voice or quoted_message.audio:
+                content_type = "audio"
+                content = quoted_message.voice or quoted_message.audio
+            elif quoted_message.video:
+                content_type = "video"
+                content = quoted_message.video
+            elif quoted_message.photo:
+                content_type = "photo"
+                content = quoted_message.photo[-1]  # Беремо найбільше зображення
             else:
-                await update.message.reply_text("Будь ласка, надайте текст або зображення для аналізу.")
+                content_type = "unknown"
+                content = None
+            
+            logger.info(f"Тип цитованого контенту: {content_type}")
+            
+            # Перевіряємо, чи повідомлення користувача починається з "Бот"
+            if text.lower().startswith("бот"):
+                user_query = text[3:].strip()  # Видаляємо "Бот" і пробіли
+                
+                try:
+                    if content_type == "text":
+                        # Обробка текстового контенту
+                        await process_text_content(update, context, content, user_query)
+                    elif content_type == "audio":
+                        # Обробка аудіо контенту
+                        await process_audio_content(update, context, content, user_query)
+                    elif content_type == "video":
+                        # Обробка відео контенту
+                        await process_video_content(update, context, content, user_query)
+                    elif content_type == "photo":
+                        # Обробка фото контенту
+                        await process_photo_content(update, context, content, user_query)
+                    else:
+                        await update.message.reply_text("Вибачте, я не можу обробити цей тип контенту.")
+                except Exception as e:
+                    logger.error(f"Помилка при обробці цитованого контенту: {str(e)}", exc_info=True)
+                    await update.message.reply_text("Виникла помилка при обробці цитованого контенту. Будь ласка, спробуйте ще раз.")
+            else:
+                logger.debug("Повідомлення не починається з 'Бот', ігноруємо")
+                return
         
+        # Обробка звичайних повідомлень (не цитат)
         else:
-            logger.debug(f"Повідомлення не є запитом до бота. {user_info}, {chat_info}")
+            should_process = (
+                (chat_type == 'private') or
+                (chat_type in ['group', 'supergroup'] and text and text.lower().startswith("бот"))
+            )
+
+            if should_process:
+                logger.info(f"Обробка повідомлення: {text[:50] if text else 'Зображення без тексту'}...")
+                if chat_type in ['group', 'supergroup'] and text and text.lower().startswith("бот"):
+                    text = text[3:].strip()
+
+                image_path = None
+                if message.photo:
+                    logger.debug(f"Виявлено зображення в поточному повідомленні. {user_info}, {chat_info}")
+                    image_file = await message.photo[-1].get_file()
+                    image_path = os.path.join(temp_dir, f'{image_file.file_id}.jpg')
+                    logger.debug(f"Спроба завантаження зображення: {image_path}")
+                    try:
+                        await image_file.download_to_drive(image_path)
+                        logger.debug(f"Зображення успішно завантажено: {image_path}")
+                    except Exception as e:
+                        logger.error(f"Помилка при завантаженні зображення: {e}", exc_info=True)
+                        await update.message.reply_text("Виникла помилка при завантаженні зображення. Будь ласка, спробуйте ще раз.")
+                        return
+                
+                if text or image_path:
+                    try:
+                        response_generator = analyze_content(text, image_path, context_manager.get_context(user_id) if user_settings['ENABLE_CONTEXT'] else None)
+                        await send_streaming_message(update, context, response_generator)
+                    except Exception as e:
+                        logger.error(f"Помилка в analyze_and_respond: {e}", exc_info=True)
+                        await update.message.reply_text("Виникла помилка при аналізі вашого запиту. Будь ласка, спробуйте ще раз.")
+                else:
+                    await update.message.reply_text("Будь ласка, надайте текст або зображення для аналізу.")
+            
+            else:
+                logger.debug(f"Повідомлення не є запитом до бота. {user_info}, {chat_info}")
 
     except Exception as e:
         logger.error(f"Помилка при обробці повідомлення: {e}", exc_info=True)
         await update.message.reply_text("Виникла помилка при обробці вашого запиту. Будь ласка, спробуйте ще раз.")
+        
+# Допоміжні функції для обробки різних типів контенту
+async def process_text_content(update, context, content, user_query):
+    # Логіка обробки текстового контенту
+    full_text = f"{content}\n\nЗапит користувача: {user_query}"
+    response_generator = analyze_content(full_text, None, context_manager.get_context(update.effective_user.id) if get_user_settings(context, update.effective_user.id)['ENABLE_CONTEXT'] else None)
+    await send_streaming_message(update, context, response_generator)
+
+async def process_audio_content(update, context, content, user_query):
+    # Логіка обробки аудіо контенту
+    audio_path = os.path.join(temp_dir, f'{content.file_id}.ogg')
+    try:
+        file = await content.get_file()  # Додано await тут
+        await file.download_to_drive(audio_path)
+        transcription = await transcribe_audio(audio_path, get_user_settings(context, update.effective_user.id)['LANGUAGE'])
+        full_text = f"Транскрипція аудіо: {transcription}\n\nЗапит користувача: {user_query}"
+        response_generator = analyze_content(full_text, None, context_manager.get_context(update.effective_user.id) if get_user_settings(context, update.effective_user.id)['ENABLE_CONTEXT'] else None)
+        await send_streaming_message(update, context, response_generator)
+    finally:
+        cleanup_temp_files(audio_path)
+
+async def process_video_content(update, context, content, user_query):
+    # Логіка обробки відео контенту
+    video_path = os.path.join(temp_dir, f'{content.file_id}.mp4')
+    audio_path = os.path.join(temp_dir, f'{content.file_id}.ogg')
+    try:
+        file = await content.get_file()  # Додано await тут
+        await file.download_to_drive(video_path)
+        extract_audio_from_video(video_path, audio_path)
+        transcription = await transcribe_audio(audio_path, get_user_settings(context, update.effective_user.id)['LANGUAGE'])
+        full_text = f"Транскрипція відео: {transcription}\n\nЗапит користувача: {user_query}"
+        response_generator = analyze_content(full_text, None, context_manager.get_context(update.effective_user.id) if get_user_settings(context, update.effective_user.id)['ENABLE_CONTEXT'] else None)
+        await send_streaming_message(update, context, response_generator)
+    finally:
+        cleanup_temp_files(video_path, audio_path)
+
+async def process_photo_content(update, context, content, user_query):
+    # Логіка обробки фото контенту
+    photo_path = os.path.join(temp_dir, f'{content.file_id}.jpg')
+    try:
+        file = await content.get_file()  # Додано await тут
+        await file.download_to_drive(photo_path)
+        full_text = f"Запит користувача: {user_query}"
+        response_generator = analyze_content(full_text, photo_path, context_manager.get_context(update.effective_user.id) if get_user_settings(context, update.effective_user.id)['ENABLE_CONTEXT'] else None)
+        await send_streaming_message(update, context, response_generator)
+    finally:
+        cleanup_temp_files(photo_path)
 
 async def analyze_and_respond(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, image_path: str = None):
     logger.info(f"Функція analyze_and_respond викликана. Текст: {text[:50]}..., Шлях до зображення: {image_path}")
