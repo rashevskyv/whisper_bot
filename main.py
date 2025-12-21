@@ -5,8 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 from telegram.request import HTTPXRequest
 from bot.database.session import init_db
 from bot.handlers.commands import start, button_handler
-# Імпортуємо новий хендлер
-from bot.handlers.messages import handle_text, handle_callback, handle_voice_video
+from bot.handlers.messages import handle_text, handle_callback, handle_voice_video, handle_photo
 from config import TOKEN
 
 logging.basicConfig(
@@ -43,16 +42,19 @@ def main():
     
     app.add_handler(CommandHandler("start", start))
     
-    # 1. Обробка Медіа (Голосові, Відео, Кружечки)
+    # 1. Голосові, відео-нотатки, відео (пріоритет)
     app.add_handler(MessageHandler(
         filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE, 
         handle_voice_video
     ))
+
+    # 2. Фото (Vision)
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    # 2. Текстові повідомлення
+    # 3. Текст (в кінці, бо фільтр загальний)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
-    # 3. Callbacks
+    # 4. Кнопки
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     print("✅ Бот запущено! Натисніть Ctrl+C для зупинки.")
