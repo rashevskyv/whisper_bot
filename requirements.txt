@@ -11,3 +11,5 @@ yt-dlp==2023.11.16
 openai>=1.50.0
 httpx>=0.27.0
 ffmpeg
+ddgs>=6.1.0
+google-generativeai>=0.7.2
