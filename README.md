@@ -1,76 +1,115 @@
 # 🤖 AI Telegram Assistant (Multi-Provider: OpenAI & Gemini)
 
-A powerful, multi-modal Telegram bot designed to be your ultimate assistant. It integrates **OpenAI (GPT-4o)** and **Google (Gemini 1.5)** to process text, voice, video, and images. It features real-time web search, smart summarization, and a flexible settings menu.
+A powerful, multi-modal Telegram bot designed to be your ultimate personal assistant. It seamlessly integrates **OpenAI (GPT-4o)** and **Google (Gemini 1.5/2.0)** to process text, voice, video, and images.
+
+The bot features **real-time web search**, smart summarization, context memory, and a robust settings system for customizing models and languages.
 
 ## ✨ Key Features
 
 ### 🧠 Multi-LLM Support
 - **OpenAI:** GPT-4o, GPT-4o-mini, GPT-4-Turbo.
-- **Google Gemini:** Gemini 1.5 Flash, Gemini 1.5 Pro.
-- **Switchable:** Change models instantly via the settings menu.
+- **Google Gemini:** Gemini 1.5 Pro, Gemini 2.0 Flash (Experimental).
+- **Flexible Access:** Users can provide their own API keys to unlock advanced models, or use the default system configuration (if allowed).
 
-### 🌐 Web Search (Live Access)
-- **Internet Access:** The bot can search the web (via DuckDuckGo) to answer questions about current events, weather, exchange rates, etc.
-- **Transparent:** You see when the bot is searching.
+### 🌐 Live Web Search
+- **Internet Access:** The bot can browse the web via DuckDuckGo to find real-time information (news, weather, stock prices).
+- **Smart Execution:** Powered by OpenAI Function Calling — the bot decides when to search based on your query.
+- **Citations:** Provides answers with links to sources.
 
-### 🗣 Audio & Video Processing
-- **Universal Transcription:** Converts voice messages, video notes (circles), and video files to text using **Whisper**.
-- **Smart Summarization:** "Summarize" button turns chaotic voice notes into structured reports.
+### 🗣 Audio & Video Intelligence
+- **Universal Transcription:** Automatically converts voice messages, video notes (circles), and video files to text using **Whisper**.
+- **Smart Summarization:** Includes a "Summarize" button that transforms long, chaotic audio into structured bullet points using a specialized analyst persona.
+- **Language Aware:** Transcription automatically adapts to the user's selected language settings.
 
 ### 👁 Computer Vision
-- **Analyze Anything:** Send photos to get descriptions or extract text (OCR).
-- **Dual Engine:** Uses GPT-4o Vision or Gemini Vision depending on your settings.
+- **Image Analysis:** Send any photo to the bot.
+- **Interactive Menu:** Choose between **"Describe"** (get a detailed description) or **"OCR / Text"** (extract text from the image).
+- **Dual Engine:** Uses GPT-4o Vision or Gemini Vision depending on your active model.
 
 ### 💬 Advanced Chat Logic
-- **Streaming:** Real-time typing effect.
-- **Group Mode:**
-    - Filters spam (responds only to triggers like "bot", "gpt").
-    - Silent transcription for voice notes in groups.
-- **Personas:** Switch between "Assistant", "Friend", "Editor", "Psychologist", and more.
+- **Streaming Responses:** Replies are typed out in real-time.
+- **Smart Group Mode:**
+    - **Passive:** Ignores general chatter to avoid spam.
+    - **Reactive:** Responds only to triggers (`bot`, `gpt`, `settings`), mentions (`@botname`), or replies.
+    - **Silent Transcription:** Automatically transcribes voice notes in groups without notifying everyone.
+- **Personas:** Switch between different personalities: "Assistant", "Friend", "Editor", "Psychologist", "Coder".
 
-### 🛡 Security & Settings
-- **Custom Keys:** Users can add their own API keys (OpenAI/Google) encrypted in the database.
-- **Privacy:** Admin-controlled access and secure storage.
+### ⚙️ Settings & Security
+- **Unified Menu:** Access settings via the `/start` command or by typing "menu"/"settings".
+- **Language Switching:** Change the bot's language (UK/EN/RU) on the fly.
+- **Encrypted Storage:** User API keys are stored in the database using **Fernet (symmetric encryption)**.
+- **Robustness:** Optimized for Linux/WSL environments with custom timeout handling.
 
 ---
 
 ## 🛠 Tech Stack
 
-- **Python 3.10+**
-- **python-telegram-bot** (Async)
-- **OpenAI API** & **Google Generative AI SDK**
-- **DuckDuckGo Search**
-- **SQLAlchemy + aiosqlite**
-- **FFmpeg**
+- **Python 3.11+**
+- **python-telegram-bot** (v21+ Async)
+- **OpenAI API** & **Google GenAI SDK**
+- **DuckDuckGo Search (ddgs)**
+- **SQLAlchemy + aiosqlite** (Async Database)
+- **FFmpeg** (Media processing)
+- **Cryptography** (Data security)
 
 ---
 
-## 🚀 Installation
+## 🚀 Installation & Setup
 
 ### 1. Prerequisites
+Ensure you have **Python 3.10+** (3.11 recommended) and **FFmpeg** installed.
+
 ```bash
-sudo apt update && sudo apt install python3-venv ffmpeg -y
+# Ubuntu/Debian
+sudo apt update && sudo apt install ffmpeg -y
 ```
 
-### 2. Setup
+### 2. Clone the Repository
 ```bash
 git clone https://github.com/your-username/your-repo.git
 cd your-repo
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
 ```
 
-### 3. Configuration
-Create `.env`:
-```ini
-BOT_TOKEN=123:ABC...
-OPENAI_API_KEY=sk-...
-GOOGLE_API_KEY=AIza... (Optional, for Gemini)
-ENCRYPTION_KEY=... (Generate with cryptography module)
-ADMIN_IDS=123,456
-```
+### 3. Environment Setup
+We use a helper script `start.sh` that handles virtual environment creation and dependency installation automatically.
+
+1.  Create a `.env` file:
+    ```bash
+    nano .env
+    ```
+
+2.  Paste the configuration:
+    ```ini
+    # Telegram Bot Token (from @BotFather)
+    BOT_TOKEN=your_telegram_bot_token
+
+    # System API Keys (Optional fallbacks)
+    OPENAI_API_KEY=sk-...
+    GOOGLE_API_KEY=AIza...
+
+    # Encryption Key for Database
+    # Run: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    ENCRYPTION_KEY=your_generated_key
+
+    # Admin IDs (comma separated)
+    ADMIN_IDS=12345678,87654321
+    ```
 
 ### 4. Run
 ```bash
+chmod +x start.sh
 ./start.sh
+```
+
+---
+
+## 📅 Roadmap (TODO)
+
+- [ ] **Reminders:** Add ability to set reminders directly through the bot (using Telegram scheduled messages or backend cron tasks).
+- [ ] **Userbot Integration:** Integrate with @SaveAsBot (or similar) to download media from TikTok/Instagram links automatically.
+
+---
+
+## 📝 License
+
+This project is open-source and available under the MIT License.
