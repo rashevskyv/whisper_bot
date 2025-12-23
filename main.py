@@ -5,7 +5,10 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 from telegram.request import HTTPXRequest
 from bot.database.session import init_db
 from bot.handlers.commands import start
-from bot.handlers.messages import handle_text, handle_callback, handle_voice_video, handle_photo
+from bot.handlers.messages import (
+    handle_text, handle_callback, handle_voice_video, handle_photo, 
+    handle_internal_task # <-- Новий імпорт
+)
 from bot.handlers.settings import (
     settings_menu, keys_menu, ask_for_key, save_key, delete_key, 
     reset_context_handler, cancel_conversation, 
@@ -49,7 +52,7 @@ def main():
         .build()
     )
 
-    # Conversations
+    # --- Conversations ---
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_for_key, pattern="^add_key_openai$")],
         states={WAITING_FOR_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_key)]},
@@ -74,13 +77,12 @@ def main():
     )
     app.add_handler(custom_prompt_conv)
 
-    # Handlers
+    # --- Handlers ---
     app.add_handler(CommandHandler("start", start))
     
     app.add_handler(CallbackQueryHandler(settings_menu, pattern="^settings_menu$"))
     app.add_handler(CallbackQueryHandler(keys_menu, pattern="^keys_menu$"))
     app.add_handler(CallbackQueryHandler(start, pattern="^back_to_start$"))
-    # ОНОВЛЕНО: Патерн ловить і del_key_openai, і del_key_google
     app.add_handler(CallbackQueryHandler(delete_key, pattern="^del_key_"))
     app.add_handler(CallbackQueryHandler(reset_context_handler, pattern="^reset_context$"))
     
@@ -93,6 +95,11 @@ def main():
     app.add_handler(CallbackQueryHandler(language_menu, pattern="^lang_menu$"))
     app.add_handler(CallbackQueryHandler(set_language_gui, pattern="^set_lang_"))
 
+    # --- ПРІОРИТЕТНИЙ ХЕНДЛЕР: Внутрішня пересилка відео від Userbot ---
+    # Ловимо відео з підписом task_id:
+    app.add_handler(MessageHandler(filters.VIDEO & filters.CaptionRegex(r"^task_id:"), handle_internal_task))
+
+    # Звичайні медіа
     app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE, handle_voice_video))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
