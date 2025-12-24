@@ -1,115 +1,115 @@
-# 🤖 AI Telegram Assistant (Multi-Provider: OpenAI & Gemini)
+Ось оновлений, детальний README.md та команда для коміту, що охоплює весь масштабний рефакторинг та нові фічі.
 
-A powerful, multi-modal Telegram bot designed to be your ultimate personal assistant. It seamlessly integrates **OpenAI (GPT-4o)** and **Google (Gemini 1.5/2.0)** to process text, voice, video, and images.
+1. README.md
 
-The bot features **real-time web search**, smart summarization, context memory, and a robust settings system for customizing models and languages.
+Створіть файл README.md у корені проекту.
 
-## ✨ Key Features
+code
+Markdown
+download
+content_copy
+expand_more
+2. Клонування репозиторію
+code
+Bash
+download
+content_copy
+expand_less
+git clone https://github.com/your-username/whisper-bot.git
+cd whisper-bot
+3. Налаштування .env
 
-### 🧠 Multi-LLM Support
-- **OpenAI:** GPT-4o, GPT-4o-mini, GPT-4-Turbo.
-- **Google Gemini:** Gemini 1.5 Pro, Gemini 2.0 Flash (Experimental).
-- **Flexible Access:** Users can provide their own API keys to unlock advanced models, or use the default system configuration (if allowed).
+Створіть файл .env і заповніть його:
 
-### 🌐 Live Web Search
-- **Internet Access:** The bot can browse the web via DuckDuckGo to find real-time information (news, weather, stock prices).
-- **Smart Execution:** Powered by OpenAI Function Calling — the bot decides when to search based on your query.
-- **Citations:** Provides answers with links to sources.
+code
+Ini
+download
+content_copy
+expand_less
+# Головний бот (від BotFather)
+BOT_TOKEN=123456:ABC...
+MAIN_BOT_USERNAME=NameOfYourBot
 
-### 🗣 Audio & Video Intelligence
-- **Universal Transcription:** Automatically converts voice messages, video notes (circles), and video files to text using **Whisper**.
-- **Smart Summarization:** Includes a "Summarize" button that transforms long, chaotic audio into structured bullet points using a specialized analyst persona.
-- **Language Aware:** Transcription automatically adapts to the user's selected language settings.
+# API Ключі (Системні)
+OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=AIza...
 
-### 👁 Computer Vision
-- **Image Analysis:** Send any photo to the bot.
-- **Interactive Menu:** Choose between **"Describe"** (get a detailed description) or **"OCR / Text"** (extract text from the image).
-- **Dual Engine:** Uses GPT-4o Vision or Gemini Vision depending on your active model.
+# Ключ шифрування БД (Fernet)
+# Згенерувати: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ENCRYPTION_KEY=...
 
-### 💬 Advanced Chat Logic
-- **Streaming Responses:** Replies are typed out in real-time.
-- **Smart Group Mode:**
-    - **Passive:** Ignores general chatter to avoid spam.
-    - **Reactive:** Responds only to triggers (`bot`, `gpt`, `settings`), mentions (`@botname`), or replies.
-    - **Silent Transcription:** Automatically transcribes voice notes in groups without notifying everyone.
-- **Personas:** Switch between different personalities: "Assistant", "Friend", "Editor", "Psychologist", "Coder".
+# Userbot (my.telegram.org)
+API_ID=12345
+API_HASH=abcdef...
 
-### ⚙️ Settings & Security
-- **Unified Menu:** Access settings via the `/start` command or by typing "menu"/"settings".
-- **Language Switching:** Change the bot's language (UK/EN/RU) on the fly.
-- **Encrypted Storage:** User API keys are stored in the database using **Fernet (symmetric encryption)**.
-- **Robustness:** Optimized for Linux/WSL environments with custom timeout handling.
+# Адміни (ID через кому)
+ADMIN_IDS=12345678,87654321
+4. Перший запуск (Авторизація Userbot)
 
----
+Потрібно один раз авторизувати Userbot для завантаження відео з соцмереж.
 
-## 🛠 Tech Stack
+code
+Bash
+download
+content_copy
+expand_less
+# Створіть venv та встановіть залежності
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 
-- **Python 3.11+**
-- **python-telegram-bot** (v21+ Async)
-- **OpenAI API** & **Google GenAI SDK**
-- **DuckDuckGo Search (ddgs)**
-- **SQLAlchemy + aiosqlite** (Async Database)
-- **FFmpeg** (Media processing)
-- **Cryptography** (Data security)
+# Запустіть авторизацію
+python userbot.py
+# Введіть номер телефону і код. Після успішного входу натисніть Ctrl+C.
+5. Запуск Бота
 
----
+Використовуйте скрипт start.sh, який запустить і основного бота, і юзербота у фоні.
 
-## 🚀 Installation & Setup
-
-### 1. Prerequisites
-Ensure you have **Python 3.10+** (3.11 recommended) and **FFmpeg** installed.
-
-```bash
-# Ubuntu/Debian
-sudo apt update && sudo apt install ffmpeg -y
-```
-
-### 2. Clone the Repository
-```bash
-git clone https://github.com/your-username/your-repo.git
-cd your-repo
-```
-
-### 3. Environment Setup
-We use a helper script `start.sh` that handles virtual environment creation and dependency installation automatically.
-
-1.  Create a `.env` file:
-    ```bash
-    nano .env
-    ```
-
-2.  Paste the configuration:
-    ```ini
-    # Telegram Bot Token (from @BotFather)
-    BOT_TOKEN=your_telegram_bot_token
-
-    # System API Keys (Optional fallbacks)
-    OPENAI_API_KEY=sk-...
-    GOOGLE_API_KEY=AIza...
-
-    # Encryption Key for Database
-    # Run: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    ENCRYPTION_KEY=your_generated_key
-
-    # Admin IDs (comma separated)
-    ADMIN_IDS=12345678,87654321
-    ```
-
-### 4. Run
-```bash
+code
+Bash
+download
+content_copy
+expand_less
 chmod +x start.sh
 ./start.sh
-```
-
+📂 Структура Проекту
+code
+Text
+download
+content_copy
+expand_less
+.
+├── bot/
+│   ├── ai/          # Провайдери (OpenAI, Google)
+│   ├── database/    # Моделі БД
+│   ├── handlers/    # Логіка бота (розбита на модулі: text, media, ai, settings)
+│   └── utils/       # Утиліти (downloader, media converter, html cleaner)
+├── userbot.py       # Клієнт для скачування медіа (Pyrogram)
+├── main.py          # Точка входу
+├── config.py        # Промпти та налаштування
+└── start.sh         # Скрипт запуску
+code
+Code
+download
+content_copy
+expand_less
 ---
 
-## 📅 Roadmap (TODO)
+### 2. Git Commit
 
-- [ ] **Reminders:** Add ability to set reminders directly through the bot (using Telegram scheduled messages or backend cron tasks).
-- [ ] **Userbot Integration:** Integrate with @SaveAsBot (or similar) to download media from TikTok/Instagram links automatically.
+Цей коміт фіксує великий рефакторинг коду (розбиття на модулі), покращення обробки довгих повідомлень та виправлення помилок з HTML.
 
----
+Виконайте в терміналі:
 
-## 📝 License
+```bash
+git add .
+git commit -m "refactor: Split handlers & improve message reliability
 
-This project is open-source and available under the MIT License.
+- Modularization: Split 'messages.py' into 'text.py', 'media.py', 'ai.py', 'callbacks.py', and 'common.py' for better maintainability.
+- Feature (UX): Added 'send_long_message' utility to smartly split long AI responses (>4096 chars) without breaking HTML tags.
+- Feature (UX): Implemented 'clean_html' to strip unsupported tags (<html>, <body>) and convert Markdown to HTML.
+- Feature (Media): Added 'MEDIA_GROUP_CACHE' to support captions in photo albums.
+- Feature (AI): Added 'Beautify' step for transcriptions (AI inserts paragraphs before sending).
+- Fix: Solved 'Chat object has no attribute reply_text' error.
+- Fix: Improved 'Vision on Reply' logic - replying to a photo with text now triggers analysis.
+- Config: Updated system prompts with strict HTML formatting rules."
