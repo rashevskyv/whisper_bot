@@ -40,8 +40,6 @@ class ContextManager:
             messages.append({"role": "system", "content": sys_prompt})
 
             # 2. Отримуємо історію повідомлень
-            # Логіка: беремо останні N повідомлень за останні X годин
-            # Важливо брати їх у зворотному порядку (від найновіших), а потім розвернути
             since_time = datetime.utcnow() - timedelta(hours=time_window_hours)
             
             stmt = (
@@ -57,18 +55,38 @@ class ContextManager:
             result = await session.execute(stmt)
             history_objs = result.scalars().all()
 
-            # Розвертаємо список, щоб найстаріші були зверху (для GPT це важливо)
+            # Розвертаємо список
             for msg in reversed(history_objs):
                 messages.append({"role": msg.role, "content": msg.content})
 
         return messages
 
-    async def clear_context(self, user_id: int):
-        """Очищає історію повідомлень користувача (команда /reset)"""
+    async def get_last_transcription(self, user_id: int) -> str:
+        """
+        Шукає останнє повідомлення користувача, яке починається з [Транскрипція]
+        Це потрібно для кнопок, щоб взяти повний текст.
+        """
         async with AsyncSessionLocal() as session:
-            # Тут ми можемо або видаляти фізично, або ставити флаг is_archived
-            # Для простоти поки що видаляємо старі записи кешу, залишаючи юзера
-            # Але реалізацію зробимо пізніше, якщо треба
-            pass
+            stmt = (
+                select(MessageCache)
+                .where(
+                    MessageCache.user_id == user_id,
+                    MessageCache.role == 'user',
+                    MessageCache.content.like("[Транскрипція]:%")
+                )
+                .order_by(desc(MessageCache.timestamp))
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            msg = result.scalar_one_or_none()
+            
+            if msg:
+                # Вирізаємо префікс "[Транскрипція]: "
+                return msg.content.replace("[Транскрипція]: ", "", 1)
+            return None
+
+    async def clear_context(self, user_id: int):
+        """Очищає історію (поки не реалізовано видалення, але можна додати логіку архівування)"""
+        pass
 
 context_manager = ContextManager()

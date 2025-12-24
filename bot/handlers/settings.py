@@ -8,26 +8,40 @@ from bot.utils.security import key_manager
 from config import PERSONAS, DEFAULT_SETTINGS, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
-
-# Стани для ConversationHandler
 WAITING_FOR_KEY = 1
 WAITING_FOR_CUSTOM_MODEL = 2
 WAITING_FOR_CUSTOM_PROMPT = 3
 
-async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Головне меню налаштувань"""
-    query = update.callback_query
-    await query.answer()
-    
+# --- ЕКСПОРТОВАНА ФУНКЦІЯ ДЛЯ ЄДИНОГО МЕНЮ ---
+def get_main_menu_keyboard():
+    """Повертає стандартну клавіатуру налаштувань"""
     keyboard = [
         [InlineKeyboardButton("🧠 AI (Модель/Персона)", callback_data="ai_menu")],
         [InlineKeyboardButton("🌐 Мова / Language", callback_data="lang_menu")],
         [InlineKeyboardButton("🔑 Мої ключі API", callback_data="keys_menu")],
         [InlineKeyboardButton("🧹 Очистити пам'ять", callback_data="reset_context")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_start")]
+        [InlineKeyboardButton("🔙 Закрити меню", callback_data="close_menu")] # Змінено на закриття/видалення
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("⚙️ <b>Головні налаштування:</b>", reply_markup=reply_markup, parse_mode='HTML')
+    return InlineKeyboardMarkup(keyboard)
+
+async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробник callback для головного меню"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "⚙️ <b>Головні налаштування:</b>\n\nТут ви можете змінити мову, модель інтелекту та керувати ключами.", 
+        reply_markup=get_main_menu_keyboard(), 
+        parse_mode='HTML'
+    )
+
+async def close_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Закриває меню (видаляє повідомлення)"""
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.message.delete()
+    except:
+        await query.message.edit_text("Меню закрито.")
 
 # --- МЕНЮ МОВИ ---
 async def language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -38,11 +52,12 @@ async def language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = await session.get(User, user_id)
         current_lang = user.settings.get('language', 'uk')
 
-    text = f"🌐 <b>Current Language:</b> {current_lang.upper()}\n\nОберіть мову спілкування та розпізнавання:"
+    text = f"🌐 <b>Current Language / Поточна мова:</b> {current_lang.upper()}\n\nЦя мова використовується для:\n• Відповідей бота\n• Розпізнавання голосових (Whisper)"
     
     langs = [('🇺🇦 Українська', 'uk'), ('🇬🇧 English', 'en'), ('🇷🇺 Русский', 'ru')]
     keyboard = []
     for label, code in langs:
+        # Додаємо маркер обраної мови
         btn_text = f"✅ {label}" if current_lang == code else label
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"set_lang_{code}")])
     
@@ -79,17 +94,15 @@ async def ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def model_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = update.effective_user.id
-    
     async with AsyncSessionLocal() as session:
         user = await session.get(User, user_id)
         current_model = user.settings.get('model', DEFAULT_SETTINGS['model'])
         
-        # Перевірка ключів
+        # Перевірка наявності ключів
         keys_res = await session.execute(
             select(APIKey).where(APIKey.user_id == user_id, APIKey.is_active == True)
         )
         user_keys = keys_res.scalars().all()
-        
         has_openai = any(k.provider == 'openai' for k in user_keys)
         has_google = any(k.provider == 'google' for k in user_keys)
         is_admin = user_id in ADMIN_IDS
@@ -98,31 +111,27 @@ async def model_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     
     # 1. OpenAI Models
-    # Mini доступна всім (якщо є системний ключ), інші - тільки з ключем
     models = ["gpt-4o-mini"]
-    if has_openai or is_admin: # Адміни теж можуть
+    if has_openai or is_admin:
         models.extend(["gpt-4o", "gpt-4-turbo"])
     
     # 2. Google Models
-    # Доступні ТІЛЬКИ якщо є свій ключ Google АБО ти Адмін
     if has_google or is_admin:
         models.extend([
             "gemini-2.0-flash-exp",
             "gemini-1.5-pro",
             "gemini-1.5-flash"
         ])
-        text += "✅ <i>Gemini доступні (Admin/Key).</i>\n"
+        text += "✅ <i>Gemini доступні.</i>\n"
     else:
-        text += "🔒 <i>Gemini приховані. Додайте Google API Key.</i>\n"
+        text += "🔒 <i>Gemini приховані.</i>\n"
 
-    # Генеруємо кнопки
     for m in models:
         label = f"✅ {m}" if current_model == m else m
         keyboard.append([InlineKeyboardButton(label, callback_data=f"set_model_{m}")])
             
-    # Кастомна модель (тільки для продвинутих)
     if has_openai or is_admin:
-        keyboard.append([InlineKeyboardButton("✍️ Вписати свою модель...", callback_data="ask_custom_model")])
+        keyboard.append([InlineKeyboardButton("✍️ Вписати свою...", callback_data="ask_custom_model")])
     
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="ai_menu")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
@@ -142,7 +151,9 @@ async def set_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer(f"Модель змінено на {new_model}")
     await model_menu(update, context)
 
-# ... (persona_menu, set_persona, ask/save custom - залишаються без змін) ...
+# ... (інші функції persona_menu, set_persona, convs залишаються без змін, але важливо імпортувати їх коректно) ...
+# Я додаю їх сюди для цілісності файлу
+
 async def persona_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; user_id = update.effective_user.id
     async with AsyncSessionLocal() as session:
@@ -187,124 +198,54 @@ async def save_custom_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
     async with AsyncSessionLocal() as session: user = await session.get(User, user_id); user.system_prompt = prompt; await session.commit()
     await update.message.reply_text("✅ Промпт збережено!"); return ConversationHandler.END
 
-# --- ОНОВЛЕНЕ МЕНЮ КЛЮЧІВ ---
 async def keys_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = update.effective_user.id
-    
+    query = update.callback_query; user_id = update.effective_user.id
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(APIKey).where(APIKey.user_id == user_id, APIKey.is_active == True)
-        )
+        result = await session.execute(select(APIKey).where(APIKey.user_id == user_id, APIKey.is_active == True))
         keys = result.scalars().all()
-    
     has_openai = any(k.provider == 'openai' for k in keys)
     has_google = any(k.provider == 'google' for k in keys)
-    
-    text = "<b>🔑 Керування ключами</b>\nНадішліть ключ, і я сам визначу провайдера (OpenAI/Google)."
+    text = "<b>🔑 Керування ключами</b>"
     keyboard = []
-    
-    # OpenAI
-    if has_openai:
-        keyboard.append([InlineKeyboardButton("❌ Видалити OpenAI", callback_data="del_key_openai")])
-        text += "\n✅ OpenAI: Власний ключ."
-    else:
-        text += "\n⚠️ OpenAI: Системний ключ."
-
-    # Google
-    if has_google:
-        keyboard.append([InlineKeyboardButton("❌ Видалити Google", callback_data="del_key_google")])
-        text += "\n✅ Google: Власний ключ."
-    else:
-        text += "\n⚠️ Google: Не встановлено."
-
-    keyboard.append([InlineKeyboardButton("➕ Додати ключ", callback_data="add_key_openai")]) # Використовуємо той самий entry point
+    if has_openai: keyboard.append([InlineKeyboardButton("❌ Видалити OpenAI", callback_data="del_key_openai")]); text += "\n✅ OpenAI: Власний ключ."
+    else: text += "\n⚠️ OpenAI: Системний ключ."
+    if has_google: keyboard.append([InlineKeyboardButton("❌ Видалити Google", callback_data="del_key_google")]); text += "\n✅ Google: Власний ключ."
+    else: text += "\n⚠️ Google: Не встановлено."
+    keyboard.append([InlineKeyboardButton("➕ Додати ключ", callback_data="add_key_openai")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
-    
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
 async def ask_for_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text(
-        "Надішліть API ключ.\n"
-        "• OpenAI починається на <code>sk-</code>\n"
-        "• Google починається на <code>AIza</code>",
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Скасувати", callback_data="cancel_conv")]])
-    )
+    query = update.callback_query; await query.answer()
+    await query.edit_message_text("Надішліть ключ (sk-... або AIza...).", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Скасувати", callback_data="cancel_conv")]]))
     return WAITING_FOR_KEY
 
 async def save_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    key_text = update.message.text.strip()
-    
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
-    
-    # АВТОВИЗНАЧЕННЯ ПРОВАЙДЕРА
+    user_id = update.effective_user.id; key_text = update.message.text.strip()
+    try: await update.message.delete()
+    except: pass
     provider = None
-    if key_text.startswith("sk-"):
-        provider = "openai"
-    elif key_text.startswith("AIza"):
-        provider = "google"
-    
-    if not provider:
-        await update.message.reply_text("❌ Невідомий формат ключа. Має починатися з 'sk-' або 'AIza'.")
-        return WAITING_FOR_KEY
-
-    encrypted = key_manager.encrypt(key_text)
-    
+    if key_text.startswith("sk-"): provider = "openai"
+    elif key_text.startswith("AIza"): provider = "google"
+    if not provider: await update.message.reply_text("❌ Невідомий формат."); return WAITING_FOR_KEY
+    enc = key_manager.encrypt(key_text)
     async with AsyncSessionLocal() as session:
-        # Видаляємо старий ключ ЦЬОГО провайдера
-        old_keys = await session.execute(
-            select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider)
-        )
-        for k in old_keys.scalars().all():
-            await session.delete(k)
-            
-        # Додаємо новий
-        session.add(APIKey(
-            user_id=user_id,
-            provider=provider,
-            encrypted_key=encrypted,
-            is_active=True
-        ))
-        await session.commit()
-    
-    await update.message.reply_text(f"✅ Ключ {provider.capitalize()} збережено!")
-    return ConversationHandler.END
+        old = await session.execute(select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider))
+        for k in old.scalars().all(): await session.delete(k)
+        session.add(APIKey(user_id=user_id, provider=provider, encrypted_key=enc, is_active=True)); await session.commit()
+    await update.message.reply_text(f"✅ Ключ {provider} збережено!"); return ConversationHandler.END
 
 async def delete_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = update.effective_user.id
-    
-    # Визначаємо, який ключ видаляти, з callback_data
-    provider_to_delete = query.data.replace("del_key_", "")
-    
+    query = update.callback_query; user_id = update.effective_user.id
+    provider = query.data.replace("del_key_", "")
     async with AsyncSessionLocal() as session:
-        keys = await session.execute(
-            select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider_to_delete)
-        )
-        for k in keys.scalars().all():
-            await session.delete(k)
-        await session.commit()
-        
-    await query.answer(f"Ключ {provider_to_delete} видалено!", show_alert=True)
-    await keys_menu(update, context)
+        old = await session.execute(select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider))
+        for k in old.scalars().all(): await session.delete(k); await session.commit()
+    await query.answer("Видалено!"); await keys_menu(update, context)
 
 async def reset_context_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer("Пам'ять очищено!", show_alert=True)
-    await settings_menu(update, context)
+    query = update.callback_query; await query.answer("Очищено!", show_alert=True); await settings_menu(update, context)
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text("Дію скасовано.")
-        await settings_menu(update, context)
-    else:
-        await update.message.reply_text("Дію скасовано.")
-    return ConversationHandler.END
+    if update.callback_query: await update.callback_query.answer(); await update.callback_query.edit_message_text("Скасовано."); await settings_menu(update, context)
+    else: await update.message.reply_text("Скасовано."); return ConversationHandler.END
