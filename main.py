@@ -5,23 +5,33 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 from telegram.request import HTTPXRequest
 from bot.database.session import init_db
 from bot.handlers.commands import start
+
+# Імпорти з нових модулів
 from bot.handlers.text import handle_text, handle_internal_task
 from bot.handlers.media import handle_voice_video, handle_photo
 from bot.handlers.callbacks import handle_callback
+
+# Імпорти налаштувань
 from bot.handlers.settings import (
     settings_menu, keys_menu, ask_for_key, save_key, delete_key, 
     reset_context_handler, cancel_conversation, close_menu,
     ai_menu, model_menu, set_model, ask_custom_model, save_custom_model,
     persona_menu, set_persona, ask_custom_prompt, save_custom_prompt,
-    language_menu, set_language_gui,
+    language_menu, set_language_gui, 
+    transcription_menu, set_transcription_model,
     WAITING_FOR_KEY, WAITING_FOR_CUSTOM_MODEL, WAITING_FOR_CUSTOM_PROMPT
 )
 from config import TOKEN
 import warnings
 from telegram.warnings import PTBUserWarning
+
+# Ігноруємо попередження про per_message
 warnings.filterwarnings("ignore", category=PTBUserWarning)
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 async def post_init(application: Application):
@@ -29,13 +39,26 @@ async def post_init(application: Application):
     print("📦 База даних перевірена/створена успішно.")
 
 def main():
-    if not TOKEN: print("❌ Error: TOKEN not found"); return
+    if not TOKEN:
+        print("❌ Помилка: Не задано BOT_TOKEN в .env!")
+        return
 
-    req = HTTPXRequest(connection_pool_size=8, connect_timeout=20.0, read_timeout=20.0, write_timeout=20.0)
+    req = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=20.0,
+        read_timeout=20.0,
+        write_timeout=20.0
+    )
 
-    app = ApplicationBuilder().token(TOKEN).post_init(post_init).request(req).build()
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .post_init(post_init)
+        .request(req)
+        .build()
+    )
 
-    # Settings Conversations
+    # --- Conversations (Налаштування) ---
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_for_key, pattern="^add_key_openai$")],
         states={WAITING_FOR_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_key)]},
@@ -60,31 +83,44 @@ def main():
     )
     app.add_handler(custom_prompt_conv)
 
-    # Commands
+    # --- Команди ---
     app.add_handler(CommandHandler("start", start))
     
-    # Settings Handlers
+    # --- Меню Налаштувань ---
     app.add_handler(CallbackQueryHandler(settings_menu, pattern="^settings_menu$"))
     app.add_handler(CallbackQueryHandler(close_menu, pattern="^close_menu$"))
     app.add_handler(CallbackQueryHandler(keys_menu, pattern="^keys_menu$"))
     app.add_handler(CallbackQueryHandler(start, pattern="^back_to_start$"))
     app.add_handler(CallbackQueryHandler(delete_key, pattern="^del_key_"))
     app.add_handler(CallbackQueryHandler(reset_context_handler, pattern="^reset_context$"))
+    
+    # AI Налаштування
     app.add_handler(CallbackQueryHandler(ai_menu, pattern="^ai_menu$"))
     app.add_handler(CallbackQueryHandler(model_menu, pattern="^model_menu$"))
     app.add_handler(CallbackQueryHandler(set_model, pattern="^set_model_"))
     app.add_handler(CallbackQueryHandler(persona_menu, pattern="^persona_menu$"))
     app.add_handler(CallbackQueryHandler(set_persona, pattern="^set_persona_"))
+    
+    # Мова
     app.add_handler(CallbackQueryHandler(language_menu, pattern="^lang_menu$"))
     app.add_handler(CallbackQueryHandler(set_language_gui, pattern="^set_lang_"))
+    
+    # Транскрибація
+    app.add_handler(CallbackQueryHandler(transcription_menu, pattern="^transcription_menu$"))
+    app.add_handler(CallbackQueryHandler(set_transcription_model, pattern="^set_trans_"))
 
-    # Messages
+    # --- Пріоритетні повідомлення ---
+    # 1. Внутрішні задачі від Userbot (відео з TikTok/Insta)
     app.add_handler(MessageHandler(filters.VIDEO & filters.CaptionRegex(r"^task_id:"), handle_internal_task))
+
+    # 2. Медіа (Голосові, Відео, Фото)
     app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE, handle_voice_video))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    
+    # 3. Текст та посилання (YouTube/Twitter, Меню)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
-    # Callbacks
+    # --- Callbacks (Кнопки під повідомленнями) ---
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     print("✅ Бот запущено! Натисніть Ctrl+C для зупинки.")

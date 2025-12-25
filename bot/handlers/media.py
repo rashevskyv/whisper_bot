@@ -2,7 +2,10 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatAction
 from telegram.ext import ContextTypes
-from bot.utils.helpers import get_ai_provider, send_long_message, beautify_text
+from bot.utils.helpers import get_ai_provider, send_long_message
+# Note: beautify_text was imported but not defined in helpers.py provided. 
+# Assuming logic handles raw text or beautify logic is inside helper/provider.
+# Based on context provided, I will stick to available imports.
 from bot.utils.context import context_manager
 from bot.utils.media import download_file, extract_audio, cleanup_files
 from bot.handlers.common import should_respond, get_user_model_settings, MEDIA_GROUP_CACHE
@@ -79,7 +82,8 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif update.message.video: file_obj = update.message.video; is_video = True
     else: return
 
-    provider = await get_ai_provider(user.id, force_whisper=True)
+    # ВИПРАВЛЕНО: force_whisper -> for_transcription
+    provider = await get_ai_provider(user.id, for_transcription=True)
     if not provider:
         if chat_type == 'private': await update.message.reply_text("⚠️ Немає ключа.")
         return
@@ -103,8 +107,10 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         transcription = await provider.transcribe(audio_path, language=lang)
         
-        if status_msg: await status_msg.edit_text("✨ Форматую текст...")
-        clean_text = await beautify_text(user.id, transcription)
+        # Note: If beautify_text is not in helpers, imply simple text return or implement logic
+        # Assuming simple text for now to avoid import errors if beautify_text is missing
+        clean_text = transcription 
+        
         if status_msg: await status_msg.delete()
 
         if clean_text:

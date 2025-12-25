@@ -11,7 +11,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(
             f"Вітаю, {user.first_name}! Ви в головному меню.",
-            reply_markup=get_main_menu_keyboard() # Єдина клавіатура
+            reply_markup=get_main_menu_keyboard()
         )
         return
 
@@ -28,7 +28,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     menu_button = KeyboardButton("⚙️ Налаштування")
-    reply_keyboard = ReplyKeyboardMarkup([[menu_button]], resize_keyboard=True)
+    # is_persistent=True змушує кнопку залишатися видимою на Desktop
+    reply_keyboard = ReplyKeyboardMarkup(
+        [[menu_button]], 
+        resize_keyboard=True, 
+        is_persistent=True 
+    )
     
     await update.message.reply_text(
         text, 
