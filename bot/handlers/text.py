@@ -1,6 +1,7 @@
 import logging
 import re
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
 from bot.database.session import AsyncSessionLocal
 from bot.database.models import DownloadQueue
@@ -9,7 +10,6 @@ from bot.utils.downloader import download_media_direct
 from bot.handlers.settings import get_main_menu_keyboard
 from bot.handlers.common import should_respond
 from bot.handlers.ai import process_gpt_request
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -62,14 +62,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. Меню
     keywords = ["налаштування", "меню", "настройки", "settings", "menu", "⚙️ налаштування"]
     if text.lower().strip() in keywords:
+        # Оновлюємо і нижню клавіатуру теж, щоб вона "прилипла"
+        menu_button = KeyboardButton("⚙️ Налаштування")
+        reply_keyboard = ReplyKeyboardMarkup([[menu_button]], resize_keyboard=True, is_persistent=True)
+        
         await update.message.reply_text(
             "⚙️ <b>Головні налаштування:</b>", 
-            reply_markup=get_main_menu_keyboard(), 
+            reply_markup=reply_keyboard, # Спочатку оновлюємо нижню
             parse_mode='HTML'
+        )
+        # Потім шлемо інлайн меню
+        await update.message.reply_text(
+            "Оберіть пункт:",
+            reply_markup=get_main_menu_keyboard()
         )
         return
 
-    # 2. Пряме завантаження
+    # 2. Пряме завантаження (YouTube/Twitter)
     direct_match = DIRECT_REGEX.search(text)
     if direct_match:
         url = direct_match.group(0)
@@ -79,14 +88,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             media_info = await download_media_direct(url)
+            
             if media_info and os.path.exists(media_info['path']):
                 if status_msg: await status_msg.edit_text("📤 Відправляю...")
+                
                 try:
                     if media_info['type'] == 'video':
-                        await update.message.reply_video(video=open(media_info['path'], 'rb'), caption=media_info['caption'], reply_to_message_id=update.message.message_id)
+                        await update.message.reply_video(
+                            video=open(media_info['path'], 'rb'),
+                            caption=None, 
+                            reply_to_message_id=update.message.message_id
+                        )
                     else:
-                        await update.message.reply_document(document=open(media_info['path'], 'rb'), caption=media_info['caption'], reply_to_message_id=update.message.message_id)
-                except: pass
+                        await update.message.reply_document(
+                            document=open(media_info['path'], 'rb'),
+                            caption=None, 
+                            reply_to_message_id=update.message.message_id
+                        )
+                except Exception:
+                    pass 
                 
                 if status_msg: await status_msg.delete()
                 try: os.remove(media_info['path'])
