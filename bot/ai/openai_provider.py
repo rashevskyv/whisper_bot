@@ -30,6 +30,14 @@ class OpenAIProvider(LLMProvider):
         allow_search = settings.get('allow_search', True)
         current_lang = settings.get('language', 'uk')
 
+        # SMART UPGRADE LOGIC
+        # Якщо ми плануємо нагадування (в контексті є слово нагадай), краще взяти розумнішу модель,
+        # якщо це дозволено (allow_search зазвичай True у адмінів/з ключами).
+        # Це допоможе уникнути помилок з датами.
+        if allow_search and model == 'gpt-4o-mini' and any("нагадай" in m.get('content', '').lower() for m in messages[-2:]):
+             logger.info("⚡ Upgrading to GPT-4o for complex reminder logic")
+             model = 'gpt-4o'
+
         tools = []
         if allow_search:
             tools.append({
@@ -71,7 +79,6 @@ class OpenAIProvider(LLMProvider):
         except: tz = datetime.timezone.utc
 
         now_local = datetime.datetime.now(tz)
-        # ДОДАНО (%A) - День тижня словами
         current_time_str = f"{now_local.strftime('%Y-%m-%d (%A) %H:%M:%S')}"
         logger.info(f"🕒 System time passed to AI: {current_time_str} ({user_tz_name})")
         
@@ -80,9 +87,9 @@ class OpenAIProvider(LLMProvider):
         
         instr = (
             f"\n\n[SYSTEM INFO]\n"
-            f"- Local Time: {current_time_str} (Zone: {user_tz_name})\n"
+            f"- Current Local Time: {current_time_str} (Zone: {user_tz_name})\n"
             f"- Language: '{current_lang}'\n"
-            f"INSTRUCTION: Use 'iso_time_local' based on Current Local Time. Pay attention to the Day of Week.\n"
+            f"INSTRUCTION: Use 'iso_time_local' based on Current Local Time. Pay CLOSE attention to the weekday when calculating dates.\n"
             f"AMBIGUITY RULE: If the user provides an event time (e.g., 'Dentist on Saturday') but NOT a reminder offset, "
             f"DO NOT schedule immediately. ASK: 'When should I remind you?'."
         )
@@ -146,9 +153,22 @@ class OpenAIProvider(LLMProvider):
                                 dt_utc = dt_local.astimezone(datetime.timezone.utc)
                                 
                                 rid = await scheduler_service.add_reminder(user_id, chat_id, text, dt_utc)
+                                
+                                # --- FORMATTING START ---
+                                days_map = {
+                                    "Monday": "Понеділок", "Tuesday": "Вівторок", "Wednesday": "Середа",
+                                    "Thursday": "Четвер", "Friday": "П'ятниця", "Saturday": "Субота", "Sunday": "Неділя"
+                                }
+                                day_name = dt_local.strftime("%A")
+                                if current_lang == 'uk':
+                                    day_name = days_map.get(day_name, day_name)
+                                
+                                display_date = dt_local.strftime("%d.%m.%Y")
                                 display_time = dt_local.strftime("%H:%M")
                                 
-                                yield f"\n✅ <b>Створено нагадування</b> на {display_time}\n📝 <i>{text}</i>"
+                                yield f"\n✅ <b>Нагадування встановлено!</b>\n📅 {day_name}, {display_date} о {display_time}\n📝 <i>{text}</i>"
+                                # --- FORMATTING END ---
+                                
                                 content = "DONE."
                                 stop_generating = True
                             else:
