@@ -71,7 +71,8 @@ class OpenAIProvider(LLMProvider):
         except: tz = datetime.timezone.utc
 
         now_local = datetime.datetime.now(tz)
-        current_time_str = f"{now_local.strftime('%Y-%m-%d %H:%M:%S')}"
+        # ДОДАНО (%A) - День тижня словами
+        current_time_str = f"{now_local.strftime('%Y-%m-%d (%A) %H:%M:%S')}"
         logger.info(f"🕒 System time passed to AI: {current_time_str} ({user_tz_name})")
         
         local_messages = [msg.copy() for msg in messages]
@@ -81,8 +82,8 @@ class OpenAIProvider(LLMProvider):
             f"\n\n[SYSTEM INFO]\n"
             f"- Local Time: {current_time_str} (Zone: {user_tz_name})\n"
             f"- Language: '{current_lang}'\n"
-            f"INSTRUCTION: Use 'iso_time_local' based on Current Local Time.\n"
-            f"AMBIGUITY RULE: If the user provides an event time (e.g., 'Dentist on Saturday') but NOT a reminder offset (e.g., 'Remind me 1 hour before'), "
+            f"INSTRUCTION: Use 'iso_time_local' based on Current Local Time. Pay attention to the Day of Week.\n"
+            f"AMBIGUITY RULE: If the user provides an event time (e.g., 'Dentist on Saturday') but NOT a reminder offset, "
             f"DO NOT schedule immediately. ASK: 'When should I remind you?'."
         )
         
