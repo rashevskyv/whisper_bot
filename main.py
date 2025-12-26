@@ -5,6 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 from telegram.request import HTTPXRequest
 from bot.database.session import init_db
 from bot.handlers.commands import start
+from bot.utils.scheduler import scheduler_service
 
 # Імпорти з нових модулів
 from bot.handlers.text import handle_text, handle_internal_task
@@ -15,11 +16,12 @@ from bot.handlers.callbacks import handle_callback
 from bot.handlers.settings import (
     settings_menu, keys_menu, ask_for_key, save_key, delete_key, 
     reset_context_handler, cancel_conversation, close_menu,
-    ai_menu, model_menu, set_model, ask_custom_model, save_custom_model,
+    model_menu, set_model, ask_custom_model, save_custom_model,
     persona_menu, set_persona, ask_custom_prompt, save_custom_prompt,
     language_menu, set_language_gui, 
     transcription_menu, set_transcription_model,
-    WAITING_FOR_KEY, WAITING_FOR_CUSTOM_MODEL, WAITING_FOR_CUSTOM_PROMPT
+    timezone_menu, set_timezone_btn, ask_custom_timezone, save_custom_timezone,
+    WAITING_FOR_KEY, WAITING_FOR_CUSTOM_MODEL, WAITING_FOR_CUSTOM_PROMPT, WAITING_FOR_TIMEZONE
 )
 from config import TOKEN
 import warnings
@@ -33,10 +35,16 @@ logging.basicConfig(
     level=logging.INFO
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 async def post_init(application: Application):
     await init_db()
     print("📦 База даних перевірена/створена успішно.")
+    
+    # Init Scheduler
+    scheduler_service.start(application)
+    await scheduler_service.restore_reminders()
+    print("⏰ Планувальник запущено.")
 
 def main():
     if not TOKEN:
@@ -45,9 +53,9 @@ def main():
 
     req = HTTPXRequest(
         connection_pool_size=8,
-        connect_timeout=20.0,
-        read_timeout=20.0,
-        write_timeout=20.0
+        connect_timeout=60.0,
+        read_timeout=60.0,
+        write_timeout=60.0
     )
 
     app = (
@@ -83,6 +91,15 @@ def main():
     )
     app.add_handler(custom_prompt_conv)
 
+    # Timezone Conversation
+    timezone_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(ask_custom_timezone, pattern="^ask_custom_tz$")],
+        states={WAITING_FOR_TIMEZONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_custom_timezone)]},
+        fallbacks=[CommandHandler("cancel", cancel_conversation), CallbackQueryHandler(cancel_conversation, pattern="^cancel_conv$")],
+        per_message=False
+    )
+    app.add_handler(timezone_conv)
+
     # --- Команди ---
     app.add_handler(CommandHandler("start", start))
     
@@ -95,7 +112,6 @@ def main():
     app.add_handler(CallbackQueryHandler(reset_context_handler, pattern="^reset_context$"))
     
     # AI Налаштування
-    app.add_handler(CallbackQueryHandler(ai_menu, pattern="^ai_menu$"))
     app.add_handler(CallbackQueryHandler(model_menu, pattern="^model_menu$"))
     app.add_handler(CallbackQueryHandler(set_model, pattern="^set_model_"))
     app.add_handler(CallbackQueryHandler(persona_menu, pattern="^persona_menu$"))
@@ -104,6 +120,10 @@ def main():
     # Мова
     app.add_handler(CallbackQueryHandler(language_menu, pattern="^lang_menu$"))
     app.add_handler(CallbackQueryHandler(set_language_gui, pattern="^set_lang_"))
+    
+    # Часовий пояс
+    app.add_handler(CallbackQueryHandler(timezone_menu, pattern="^timezone_menu$"))
+    app.add_handler(CallbackQueryHandler(set_timezone_btn, pattern="^set_tz_"))
     
     # Транскрибація
     app.add_handler(CallbackQueryHandler(transcription_menu, pattern="^transcription_menu$"))

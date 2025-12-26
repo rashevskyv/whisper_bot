@@ -39,7 +39,19 @@ class DownloadQueue(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(BigInteger) # ID чату
-    message_id = Column(Integer, nullable=True) # <-- НОВЕ ПОЛЕ: ID повідомлення для реплаю
+    message_id = Column(Integer, nullable=True)
     link = Column(String)
     status = Column(String, default="pending")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class Reminder(Base):
+    """Модель для нагадувань"""
+    __tablename__ = "reminders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(BigInteger, index=True)
+    chat_id = Column(BigInteger)
+    text = Column(Text, nullable=False)
+    trigger_time = Column(DateTime(timezone=True), nullable=False)
+    is_recurring = Column(Boolean, default=False) # Поки що тільки One-time, заділ на майбутнє
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -80,6 +80,8 @@ async def process_gpt_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     
     settings = await get_user_model_settings(user_id)
+    settings['user_id'] = user_id
+    settings['chat_id'] = update.effective_chat.id
     messages = await context_manager.get_context(user_id, limit=20)
     
     if manual_text:
