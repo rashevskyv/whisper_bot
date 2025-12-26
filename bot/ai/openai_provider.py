@@ -81,7 +81,9 @@ class OpenAIProvider(LLMProvider):
             f"\n\n[SYSTEM INFO]\n"
             f"- Local Time: {current_time_str} (Zone: {user_tz_name})\n"
             f"- Language: '{current_lang}'\n"
-            f"INSTRUCTION: Use 'iso_time_local' based on Current Local Time."
+            f"INSTRUCTION: Use 'iso_time_local' based on Current Local Time.\n"
+            f"AMBIGUITY RULE: If the user provides an event time (e.g., 'Dentist on Saturday') but NOT a reminder offset (e.g., 'Remind me 1 hour before'), "
+            f"DO NOT schedule immediately. ASK: 'When should I remind you?'."
         )
         
         if sys_idx is not None: local_messages[sys_idx]['content'] += instr
@@ -168,7 +170,7 @@ class OpenAIProvider(LLMProvider):
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
             yield "⚠️ Error."
-    
+
     async def transcribe(self, audio_path: str, language: str = None) -> str:
         try:
             with open(audio_path, "rb") as f:

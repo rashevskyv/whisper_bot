@@ -26,6 +26,11 @@ The bot features **real-time web search**, smart summarization, context memory, 
 - **Interactive Menu:** Choose between **"Describe"** (get a detailed description) or **"OCR / Text"** (extract text from the image).
 - **Dual Engine:** Uses GPT-4o Vision or Gemini Vision depending on your active model.
 
+### ⏰ Smart Reminders & Scheduler
+- **Natural Language Triggers:** Create reminders naturally (e.g., "Remind me in 10 mins to call Mom").
+- **Timezone Aware:** Handles local time conversions automatically.
+- **Management UI:** View and delete active reminders.
+
 ### 💬 Advanced Chat Logic
 - **Streaming Responses:** Replies are typed out in real-time.
 - **Smart Group Mode:**
@@ -49,6 +54,7 @@ The bot features **real-time web search**, smart summarization, context memory, 
 - **OpenAI API** & **Google GenAI SDK**
 - **DuckDuckGo Search (ddgs)**
 - **SQLAlchemy + aiosqlite** (Async Database)
+- **APScheduler** (Task scheduling)
 - **FFmpeg** (Media processing)
 - **Cryptography** (Data security)
 
@@ -98,6 +104,9 @@ We use a helper script `start.sh` that handles virtual environment creation and 
 
     # Admin IDs (comma separated)
     ADMIN_IDS=12345678,87654321
+    
+    # Timezone
+    BOT_TIMEZONE=Europe/Kiev
     ```
 
 ### 4. Run
@@ -110,11 +119,9 @@ chmod +x start.sh
 
 ## 📅 Roadmap (TODO)
 
-- [ ] **Smart Reminders & Scheduler:**
-    - [ ] **Natural Language Triggers:** Create reminders via chat (e.g., "Remind me in 2 hours", "Drink water 5 times a day").
-    - [ ] **Backend Scheduler:** Robust task queue to handle one-time and recurring events (counting repetitions).
-    - [ ] **Context Awareness:** AI should suggest reminder times based on context (e.g., "Interview at 5 PM" -> "Should I remind you 30 mins before?").
-    - [ ] **Management UI:** Menu to view and delete active reminders.
+- [ ] **Search Engine Improvements:**
+    - [ ] Replace DuckDuckGo with Google Search API or Perplexity API for better results.
+    - [ ] Fix `ddgs` library depreciation warnings.
 - [ ] **Userbot Improvements:**
     - [ ] Add support for more platforms.
     - [ ] Better error handling for restricted content.
