@@ -51,11 +51,12 @@ def main():
         print("❌ Помилка: Не задано BOT_TOKEN в .env!")
         return
 
+    # ЗБІЛЬШЕНО ТАЙМАУТИ ДО 120 СЕКУНД ДЛЯ СТАБІЛЬНОСТІ
     req = HTTPXRequest(
         connection_pool_size=8,
-        connect_timeout=60.0,
-        read_timeout=60.0,
-        write_timeout=60.0
+        connect_timeout=120.0, 
+        read_timeout=120.0,
+        write_timeout=120.0
     )
 
     app = (
@@ -145,7 +146,7 @@ def main():
 
     print("✅ Бот запущено! Натисніть Ctrl+C для зупинки.")
     app.run_polling()
-
+    
 if __name__ == '__main__':
     os.makedirs("temp", exist_ok=True)
     main()

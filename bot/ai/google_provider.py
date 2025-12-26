@@ -82,6 +82,14 @@ class GoogleProvider(LLMProvider):
         current_lang = settings.get('language', 'uk')
         allow_search = settings.get('allow_search', True)
         
+        # SMART UPGRADE LOGIC
+        # Якщо це нагадування і стоїть "слабка" модель (Flash), перемикаємось на Gemini 3 Pro
+        # для кращого розуміння дат і часу.
+        if allow_search and 'flash' in model_name.lower() and \
+           any("нагадай" in m.get('content', '').lower() for m in messages[-2:]):
+             logger.info("⚡ Upgrading to Gemini-3-Pro for complex reminder logic")
+             model_name = 'gemini-3-pro-preview'
+        
         system_instruction_text, history = self._map_messages(messages)
         
         user_tz_name = settings.get('timezone', BOT_TIMEZONE)
@@ -89,7 +97,6 @@ class GoogleProvider(LLMProvider):
         except: tz = datetime.timezone.utc
             
         now_local = datetime.datetime.now(tz)
-        # ДОДАНО (%A) - День тижня словами
         current_time_str = f"{now_local.strftime('%Y-%m-%d (%A) %H:%M:%S')}"
 
         tech_instruction = (
@@ -174,9 +181,21 @@ class GoogleProvider(LLMProvider):
                             dt_utc = dt_local.astimezone(datetime.timezone.utc)
                             
                             rid = await scheduler_service.add_reminder(user_id, chat_id, text, dt_utc)
+                            
+                            # --- FORMATTING START ---
+                            days_map = {
+                                "Monday": "Понеділок", "Tuesday": "Вівторок", "Wednesday": "Середа",
+                                "Thursday": "Четвер", "Friday": "П'ятниця", "Saturday": "Субота", "Sunday": "Неділя"
+                            }
+                            day_name = dt_local.strftime("%A")
+                            if current_lang == 'uk':
+                                day_name = days_map.get(day_name, day_name)
+                            
+                            display_date = dt_local.strftime("%d.%m.%Y")
                             display_time = dt_local.strftime("%H:%M")
                             
-                            yield f"\n✅ <b>Створено нагадування</b> на {display_time}\n📝 <i>{text}</i>"
+                            yield f"\n✅ <b>Нагадування встановлено!</b>\n📅 {day_name}, {display_date} о {display_time}\n📝 <i>{text}</i>"
+                            # --- FORMATTING END ---
                             
                             api_response = {"status": "success", "info": "Notification displayed."}
                             stop_generating = True
