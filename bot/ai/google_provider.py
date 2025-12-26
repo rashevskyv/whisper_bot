@@ -89,13 +89,15 @@ class GoogleProvider(LLMProvider):
         except: tz = datetime.timezone.utc
             
         now_local = datetime.datetime.now(tz)
-        current_time_str = f"{now_local.strftime('%Y-%m-%d %H:%M:%S')}"
+        # ДОДАНО (%A) - День тижня словами
+        current_time_str = f"{now_local.strftime('%Y-%m-%d (%A) %H:%M:%S')}"
 
         tech_instruction = (
             f"\n\n[SYSTEM INFO]\n"
             f"- Current Local Time: {current_time_str} (Timezone: {user_tz_name})\n"
             f"- Language: '{current_lang}'\n"
-            f"INSTRUCTION: When scheduling, provide 'iso_time_local' based on current local time.\n"
+            f"INSTRUCTION: When scheduling, provide 'iso_time_local' based on current local time. "
+            f"Use the provided Day of Week to correctly calculate future dates (e.g. if today is Friday, Saturday is tomorrow).\n"
             f"AMBIGUITY RULE: If the user mentions an event time (e.g. 'Dentist on Saturday at 15:00') "
             f"but DOES NOT specify when to receive the notification (e.g. 'in 1 hour', 'tomorrow'), "
             f"DO NOT call 'schedule_reminder' yet. Instead, ASK: 'When would you like to be reminded? (e.g., 1 hour before)'."
