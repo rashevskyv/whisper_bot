@@ -90,15 +90,15 @@ class GoogleProvider(LLMProvider):
             
         now_local = datetime.datetime.now(tz)
         current_time_str = f"{now_local.strftime('%Y-%m-%d %H:%M:%S')}"
-        
-        logger.info(f"🕒 System time passed to AI: {current_time_str} ({user_tz_name})")
 
         tech_instruction = (
             f"\n\n[SYSTEM INFO]\n"
             f"- Current Local Time: {current_time_str} (Timezone: {user_tz_name})\n"
             f"- Language: '{current_lang}'\n"
-            f"INSTRUCTION: When scheduling, provide 'iso_time_local' based STRICTLY on Current Local Time. "
-            f"Do not confuse with previous messages timestamps."
+            f"INSTRUCTION: When scheduling, provide 'iso_time_local' based on current local time.\n"
+            f"AMBIGUITY RULE: If the user mentions an event time (e.g. 'Dentist on Saturday at 15:00') "
+            f"but DOES NOT specify when to receive the notification (e.g. 'in 1 hour', 'tomorrow'), "
+            f"DO NOT call 'schedule_reminder' yet. Instead, ASK: 'When would you like to be reminded? (e.g., 1 hour before)'."
         )
         full_sys_inst = (system_instruction_text or "") + tech_instruction
 
@@ -134,13 +134,11 @@ class GoogleProvider(LLMProvider):
                         break 
                 if chunk.text: yield chunk.text
 
-            # --- FIX: RESOLVE STREAM ---
             if function_call_found:
                 try: await response_stream.resolve()
-                except Exception: pass
-            # ---------------------------
+                except Exception as e: logger.warning(f"Stream resolve warning: {e}")
 
-            stop_generating = False # Прапор для зупинки виводу тексту користувачу
+            stop_generating = False 
 
             if function_call_found and function_call_part:
                 fn_name = function_call_part.name
@@ -176,33 +174,25 @@ class GoogleProvider(LLMProvider):
                             rid = await scheduler_service.add_reminder(user_id, chat_id, text, dt_utc)
                             display_time = dt_local.strftime("%H:%M")
                             
-                            # Наше гарне повідомлення
                             yield f"\n✅ <b>Створено нагадування</b> на {display_time}\n📝 <i>{text}</i>"
                             
-                            # Кажемо моделі, що все ок
-                            api_response = {"status": "success", "info": "DONE."}
-                            
-                            # ВМИКАЄМО РЕЖИМ ТИШІ
-                            stop_generating = True 
+                            api_response = {"status": "success", "info": "Notification displayed."}
+                            stop_generating = True
                         else:
                             api_response = {"status": "error", "message": "Missing IDs"}
                     except Exception as e:
                         logger.error(f"Gemini Reminder Error: {e}")
                         api_response = {"status": "error", "message": str(e)}
 
-                # Відправляємо результат назад моделі, щоб зберегти контекст
                 final_response = await chat.send_message_async(
                     genai.protos.Content(parts=[genai.protos.Part(function_response=genai.protos.FunctionResponse(name=fn_name, response=api_response))]),
                     stream=True
                 )
                 
-                # ТУТ ГОЛОВНА ЛОГІКА ТИШІ
-                # Ми читаємо потік до кінця (щоб Gemini не образився), але НЕ YIELD-имо його юзеру
                 async for chunk in final_response:
-                    if stop_generating:
-                        continue # Просто ігноруємо текст від моделі
                     if chunk.text:
-                        yield chunk.text
+                        if not stop_generating:
+                            yield chunk.text
 
         except Exception as e:
             logger.error(f"Gemini Chat Error: {e}")

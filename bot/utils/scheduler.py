@@ -124,5 +124,38 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"❌ Failed to send reminder #{reminder_id}: {e}")
 
+    async def get_active_reminders(self, chat_id: int):
+        """Returns a list of active reminders for a user."""
+        async with AsyncSessionLocal() as session:
+            stmt = select(Reminder).where(Reminder.chat_id == chat_id).order_by(Reminder.trigger_time)
+            result = await session.execute(stmt)
+            return result.scalars().all()
+
+    async def get_reminders_count(self, chat_id: int) -> int:
+        """Returns the count of active reminders."""
+        async with AsyncSessionLocal() as session:
+            # Efficient count
+            from sqlalchemy import func
+            stmt = select(func.count()).select_from(Reminder).where(Reminder.chat_id == chat_id)
+            result = await session.execute(stmt)
+            return result.scalar()
+
+    async def delete_reminder_by_id(self, reminder_id: int):
+        """Removes reminder from DB and Scheduler."""
+        # 1. Remove from APScheduler
+        try:
+            self.scheduler.remove_job(str(reminder_id))
+            logger.info(f"🗑 Job {reminder_id} removed from scheduler.")
+        except Exception:
+            pass # Job might be missing if server restarted or it just finished
+
+        # 2. Remove from DB
+        async with AsyncSessionLocal() as session:
+            rem = await session.get(Reminder, reminder_id)
+            if rem:
+                await session.delete(rem)
+                await session.commit()
+                logger.info(f"🗑 Reminder {reminder_id} deleted from DB.")
+
 # Global Instance
 scheduler_service = SchedulerService()

@@ -2,6 +2,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import ContextTypes
 from bot.utils.helpers import get_or_create_user
 from bot.handlers.settings import get_main_menu_keyboard
+from bot.utils.scheduler import scheduler_service
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -27,10 +28,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Пиши 'меню' для налаштувань"
     )
     
-    menu_button = KeyboardButton("⚙️ Налаштування")
-    # is_persistent=True змушує кнопку залишатися видимою на Desktop
+    # Dynamic Button Logic
+    has_reminders = await scheduler_service.get_reminders_count(update.effective_chat.id) > 0
+    
+    buttons_row = [KeyboardButton("⚙️ Налаштування")]
+    if has_reminders:
+        buttons_row.insert(0, KeyboardButton("⏰ Нагадування"))
+
     reply_keyboard = ReplyKeyboardMarkup(
-        [[menu_button]], 
+        [buttons_row], 
         resize_keyboard=True, 
         is_persistent=True 
     )
@@ -42,7 +48,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.message.reply_text("Швидкий доступ:", reply_markup=get_main_menu_keyboard())
-
+    
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()

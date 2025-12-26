@@ -1,6 +1,7 @@
 import logging
 import re
 import os
+import zoneinfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
 from bot.database.session import AsyncSessionLocal
@@ -8,8 +9,10 @@ from bot.database.models import DownloadQueue
 from bot.utils.context import context_manager
 from bot.utils.downloader import download_media_direct
 from bot.handlers.settings import get_main_menu_keyboard
-from bot.handlers.common import should_respond
+from bot.handlers.common import should_respond, get_user_model_settings
 from bot.handlers.ai import process_gpt_request
+from bot.utils.scheduler import scheduler_service
+from config import BOT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -59,19 +62,62 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = update.effective_chat.type
     is_private = chat_type == 'private'
     
-    # 1. Меню
+    # 0. Перегляд нагадувань (Кнопка)
+    if text == "⏰ Нагадування":
+        reminders = await scheduler_service.get_active_reminders(update.effective_chat.id)
+        if not reminders:
+            # Якщо список порожній, оновлюємо клавіатуру (прибираємо кнопку)
+            kb = ReplyKeyboardMarkup([[KeyboardButton("⚙️ Налаштування")]], resize_keyboard=True, is_persistent=True)
+            await update.message.reply_text("📭 Список нагадувань порожній.", reply_markup=kb)
+            return
+
+        # Отримуємо налаштування користувача для правильного часового поясу
+        settings = await get_user_model_settings(user.id)
+        user_tz_str = settings.get('timezone', BOT_TIMEZONE)
+        
+        try:
+            local_tz = zoneinfo.ZoneInfo(user_tz_str)
+        except Exception:
+            local_tz = zoneinfo.ZoneInfo("UTC")
+
+        msg = f"<b>📅 Активні нагадування ({user_tz_str}):</b>\n\n"
+        keyboard = []
+        
+        for rem in reminders:
+            # Convert UTC DB time to Local User Time
+            # Переконуємось, що час в БД має таймзону (зазвичай UTC)
+            trigger_time = rem.trigger_time
+            if trigger_time.tzinfo is None:
+                trigger_time = trigger_time.replace(tzinfo=zoneinfo.ZoneInfo("UTC"))
+            
+            local_time = trigger_time.astimezone(local_tz).strftime("%d.%m %H:%M")
+            
+            # Cut long text
+            short_text = (rem.text[:30] + '..') if len(rem.text) > 30 else rem.text
+            
+            msg += f"🕒 <b>{local_time}</b>: {rem.text}\n"
+            keyboard.append([InlineKeyboardButton(f"❌ {local_time} | {short_text}", callback_data=f"del_rem_{rem.id}")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Закрити", callback_data="close_menu")])
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        return
+
+    # 1. Меню (Trigger words)
     keywords = ["налаштування", "меню", "настройки", "settings", "menu", "⚙️ налаштування"]
     if text.lower().strip() in keywords:
-        # Оновлюємо і нижню клавіатуру теж, щоб вона "прилипла"
-        menu_button = KeyboardButton("⚙️ Налаштування")
-        reply_keyboard = ReplyKeyboardMarkup([[menu_button]], resize_keyboard=True, is_persistent=True)
+        # Dynamic Button Logic for Menu Trigger
+        has_reminders = await scheduler_service.get_reminders_count(update.effective_chat.id) > 0
+        buttons_row = [KeyboardButton("⚙️ Налаштування")]
+        if has_reminders:
+            buttons_row.insert(0, KeyboardButton("⏰ Нагадування"))
+
+        reply_keyboard = ReplyKeyboardMarkup([buttons_row], resize_keyboard=True, is_persistent=True)
         
         await update.message.reply_text(
             "⚙️ <b>Головні налаштування:</b>", 
-            reply_markup=reply_keyboard, # Спочатку оновлюємо нижню
+            reply_markup=reply_keyboard, 
             parse_mode='HTML'
         )
-        # Потім шлемо інлайн меню
         await update.message.reply_text(
             "Оберіть пункт:",
             reply_markup=get_main_menu_keyboard()
