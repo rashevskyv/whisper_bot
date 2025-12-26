@@ -8,6 +8,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+# --- NEW: TIMEZONE CONFIG ---
+# Можна змінити в .env або тут. За замовчуванням Київ.
+BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Kiev") 
+# ----------------------------
+
 admin_ids_str = os.getenv("ADMIN_IDS", "")
 try:
     ADMIN_IDS = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip()]
@@ -37,7 +42,7 @@ AVAILABLE_MODELS = {
     ]
 }
 
-# UPDATED TRANSCRIPTION MODELS
+# TRANSCRIPTION MODELS
 TRANSCRIPTION_MODELS = {
     "openai": [
         "whisper-1", 
