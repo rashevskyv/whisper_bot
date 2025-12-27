@@ -62,39 +62,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = update.effective_chat.type
     is_private = chat_type == 'private'
     
-    # 0. Перегляд нагадувань (Кнопка)
+    # 0. Reminders List View
     if text == "⏰ Нагадування":
         reminders = await scheduler_service.get_active_reminders(update.effective_chat.id)
         if not reminders:
-            # Якщо список порожній, оновлюємо клавіатуру (прибираємо кнопку)
             kb = ReplyKeyboardMarkup([[KeyboardButton("⚙️ Налаштування")]], resize_keyboard=True, is_persistent=True)
             await update.message.reply_text("📭 Список нагадувань порожній.", reply_markup=kb)
             return
 
-        # Отримуємо налаштування користувача для правильного часового поясу
         settings = await get_user_model_settings(user.id)
         user_tz_str = settings.get('timezone', BOT_TIMEZONE)
-        
-        try:
-            local_tz = zoneinfo.ZoneInfo(user_tz_str)
-        except Exception:
-            local_tz = zoneinfo.ZoneInfo("UTC")
+        try: local_tz = zoneinfo.ZoneInfo(user_tz_str)
+        except: local_tz = zoneinfo.ZoneInfo("UTC")
 
         msg = f"<b>📅 Активні нагадування ({user_tz_str}):</b>\n\n"
         keyboard = []
-        
         for rem in reminders:
-            # Convert UTC DB time to Local User Time
-            # Переконуємось, що час в БД має таймзону (зазвичай UTC)
-            trigger_time = rem.trigger_time
-            if trigger_time.tzinfo is None:
-                trigger_time = trigger_time.replace(tzinfo=zoneinfo.ZoneInfo("UTC"))
-            
+            trigger_time = rem.trigger_time.replace(tzinfo=timezone.utc) if rem.trigger_time.tzinfo is None else rem.trigger_time
             local_time = trigger_time.astimezone(local_tz).strftime("%d.%m %H:%M")
-            
-            # Cut long text
             short_text = (rem.text[:30] + '..') if len(rem.text) > 30 else rem.text
-            
             msg += f"🕒 <b>{local_time}</b>: {rem.text}\n"
             keyboard.append([InlineKeyboardButton(f"❌ {local_time} | {short_text}", callback_data=f"del_rem_{rem.id}")])
         
@@ -102,88 +88,61 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         return
 
-    # 1. Меню (Trigger words)
+    # 1. Menu Trigger
     keywords = ["налаштування", "меню", "настройки", "settings", "menu", "⚙️ налаштування"]
     if text.lower().strip() in keywords:
-        # Dynamic Button Logic for Menu Trigger
         has_reminders = await scheduler_service.get_reminders_count(update.effective_chat.id) > 0
         buttons_row = [KeyboardButton("⚙️ Налаштування")]
-        if has_reminders:
-            buttons_row.insert(0, KeyboardButton("⏰ Нагадування"))
-
-        reply_keyboard = ReplyKeyboardMarkup([buttons_row], resize_keyboard=True, is_persistent=True)
-        
-        await update.message.reply_text(
-            "⚙️ <b>Головні налаштування:</b>", 
-            reply_markup=reply_keyboard, 
-            parse_mode='HTML'
-        )
-        await update.message.reply_text(
-            "Оберіть пункт:",
-            reply_markup=get_main_menu_keyboard()
-        )
+        if has_reminders: buttons_row.insert(0, KeyboardButton("⏰ Нагадування"))
+        await update.message.reply_text("⚙️ <b>Налаштування:</b>", reply_markup=ReplyKeyboardMarkup([buttons_row], resize_keyboard=True, is_persistent=True), parse_mode='HTML')
+        await update.message.reply_text("Оберіть пункт:", reply_markup=get_main_menu_keyboard())
         return
 
-    # 2. Пряме завантаження (YouTube/Twitter)
+    # 2. Direct DL (YouTube/Twitter)
     direct_match = DIRECT_REGEX.search(text)
     if direct_match:
         url = direct_match.group(0)
-        status_msg = None
-        if is_private:
-            status_msg = await update.message.reply_text("⏳ Завантажую (yt-dlp)...", reply_to_message_id=update.message.message_id)
-        
+        status_msg = await update.message.reply_text("⏳ Завантажую...", quote=True) if is_private else None
         try:
             media_info = await download_media_direct(url)
-            
             if media_info and os.path.exists(media_info['path']):
                 if status_msg: await status_msg.edit_text("📤 Відправляю...")
-                
-                try:
-                    if media_info['type'] == 'video':
-                        await update.message.reply_video(
-                            video=open(media_info['path'], 'rb'),
-                            caption=None, 
-                            reply_to_message_id=update.message.message_id
-                        )
-                    else:
-                        await update.message.reply_document(
-                            document=open(media_info['path'], 'rb'),
-                            caption=None, 
-                            reply_to_message_id=update.message.message_id
-                        )
-                except Exception:
-                    pass 
-                
+                if media_info['type'] == 'video':
+                    await update.message.reply_video(video=open(media_info['path'], 'rb'), quote=True)
+                else:
+                    await update.message.reply_document(document=open(media_info['path'], 'rb'), quote=True)
                 if status_msg: await status_msg.delete()
-                try: os.remove(media_info['path'])
-                except: pass
-            else:
-                if is_private and status_msg: await status_msg.edit_text("❌ Не вдалося завантажити.")
-        except Exception as e:
-            logger.error(f"Direct DL error: {e}")
-            if is_private and status_msg: await status_msg.edit_text("❌ Помилка.")
+                os.remove(media_info['path'])
+            elif status_msg: await status_msg.edit_text("❌ Не вдалося завантажити.")
+        except:
+            if status_msg: await status_msg.edit_text("❌ Помилка завантаження.")
         return
 
-    # 3. Userbot
+    # 3. Userbot (Insta/TikTok)
     userbot_match = USERBOT_REGEX.search(text)
     if userbot_match:
-        link = userbot_match.group(0)
         async with AsyncSessionLocal() as session:
-            queue_item = DownloadQueue(user_id=update.effective_chat.id, message_id=update.message.message_id, link=link, status="pending")
-            session.add(queue_item)
+            session.add(DownloadQueue(user_id=update.effective_chat.id, message_id=update.message.message_id, link=userbot_match.group(0)))
             await session.commit()
-        if is_private:
-            await update.message.reply_text(f"🔗 Качаю через Userbot...", reply_to_message_id=update.message.message_id)
+        if is_private: await update.message.reply_text(f"🔗 Передав замовлення юзерботу...", quote=True)
         return
 
-    # 4. GPT
+    # 4. GPT Response with enhanced Context (Mentions & Replies)
     if should_respond(update, context):
         prompt_text = text
         if update.message.reply_to_message:
             reply_msg = update.message.reply_to_message
-            if not reply_msg.photo and not (reply_msg.document and reply_msg.document.mime_type and reply_msg.document.mime_type.startswith('image')):
-                reply_content = reply_msg.text or reply_msg.caption or "[Media/File]"
-                prompt_text = f"CONTEXT (User replied to this message):\n{reply_content}\n\nUSER REQUEST:\n{text}"
+            # Отримуємо текст процитованого повідомлення
+            quoted_text = reply_msg.text or reply_msg.caption or "[Медіа файл]"
+            quoted_author = reply_msg.from_user.full_name if reply_msg.from_user else "Unknown"
+            
+            # Формуємо розширений промпт
+            prompt_text = (
+                f"--- QUOTED MESSAGE FROM {quoted_author} ---\n"
+                f"{quoted_text}\n"
+                f"--- END QUOTE ---\n\n"
+                f"USER REQUEST: {text}"
+            )
         
         await context_manager.save_message(user.id, 'user', prompt_text)
         await process_gpt_request(update, context, user.id)

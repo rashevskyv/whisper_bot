@@ -20,33 +20,37 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     caption = message.caption
     media_group_id = message.media_group_id
+    user_id = update.effective_user.id
     
     if media_group_id:
-        if caption:
-            MEDIA_GROUP_CACHE[media_group_id] = caption
-        elif media_group_id in MEDIA_GROUP_CACHE:
-            caption = MEDIA_GROUP_CACHE[media_group_id]
+        if caption: MEDIA_GROUP_CACHE[media_group_id] = caption
+        elif media_group_id in MEDIA_GROUP_CACHE: caption = MEDIA_GROUP_CACHE[media_group_id]
     
     if caption:
-        provider = await get_ai_provider(update.effective_user.id)
-        if not provider:
-            await update.message.reply_text("⚠️ Немає доступу до AI.")
-            return
+        provider = await get_ai_provider(user_id)
+        if not provider: return
 
-        status_msg = await update.message.reply_text("👀 Дивлюсь...", reply_to_message_id=message.message_id)
+        # Enhanced context if photo is a reply
+        full_prompt = caption
+        if message.reply_to_message:
+            reply_msg = message.reply_to_message
+            quoted_text = reply_msg.text or reply_msg.caption or "[Медіа]"
+            full_prompt = f"CONTEXT (User replied to this): {quoted_text}\n\nIMAGE CAPTION/PROMPT: {caption}"
+
+        status_msg = await update.message.reply_text("👀 Дивлюсь...", quote=True)
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
         
         temp_files = []
         try:
             photo_file = await message.photo[-1].get_file()
-            image_path = await download_file(photo_file, f"vision_prompt_{message.message_id}")
+            image_path = await download_file(photo_file, f"vis_{message.message_id}")
             temp_files.append(image_path)
             
-            messages = await context_manager.get_context(update.effective_user.id, limit=5)
+            messages = await context_manager.get_context(user_id, limit=5)
             full_response = ""
             last_update_len = 0
             
-            async for chunk in provider.analyze_image(image_path, caption, messages):
+            async for chunk in provider.analyze_image(image_path, full_prompt, messages):
                 full_response += chunk
                 if len(full_response) - last_update_len > 50:
                     try:
@@ -56,13 +60,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await status_msg.delete()
             await send_long_message(message, full_response, parse_mode=ParseMode.HTML)
-            
-            await context_manager.save_message(update.effective_user.id, 'user', f"[Photo with Caption]: {caption}")
-            await context_manager.save_message(update.effective_user.id, 'assistant', full_response)
-
+            await context_manager.save_message(user_id, 'user', f"[Photo Analysis]: {full_prompt}")
+            await context_manager.save_message(user_id, 'assistant', full_response)
         except Exception as e:
-            logger.error(f"Vision Direct Error: {e}")
-            await status_msg.edit_text(f"❌ Помилка: {e}")
+            logger.error(f"Vision Error: {e}")
+            await status_msg.edit_text(f"❌ Помилка аналізу.")
         finally:
             cleanup_files(temp_files)
     else:
@@ -71,7 +73,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🗑 Видалити", callback_data="delete_msg")]
         ]
         await update.message.reply_text("Що зробити з цим зображенням?", reply_markup=InlineKeyboardMarkup(keyboard), quote=True)
-
+        
 async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message: return
     user = update.effective_user; chat_type = update.effective_chat.type
@@ -82,7 +84,6 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif update.message.video: file_obj = update.message.video; is_video = True
     else: return
 
-    # ВИПРАВЛЕНО: force_whisper -> for_transcription
     provider = await get_ai_provider(user.id, for_transcription=True)
     if not provider:
         if chat_type == 'private': await update.message.reply_text("⚠️ Немає ключа.")
@@ -107,9 +108,9 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         transcription = await provider.transcribe(audio_path, language=lang)
         
-        # Note: If beautify_text is not in helpers, imply simple text return or implement logic
-        # Assuming simple text for now to avoid import errors if beautify_text is missing
-        clean_text = transcription 
+        if status_msg: await status_msg.edit_text("✨ Оформлюю текст...")
+        from bot.utils.helpers import beautify_text
+        clean_text = await beautify_text(user.id, transcription)
         
         if status_msg: await status_msg.delete()
 

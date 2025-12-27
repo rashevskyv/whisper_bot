@@ -23,7 +23,7 @@ class SchedulerService:
             logger.info("🕒 Scheduler started (UTC).")
 
     async def restore_reminders(self):
-        """Loads pending reminders from DB on startup"""
+        """Loads pending reminders from DB on startup and notifies about missed ones"""
         logger.info("🔄 Restoring reminders from DB...")
         async with AsyncSessionLocal() as session:
             stmt = select(Reminder)
@@ -31,7 +31,7 @@ class SchedulerService:
             reminders = result.scalars().all()
 
             count = 0
-            deleted_count = 0
+            missed_count = 0
             now = datetime.now(timezone.utc)
             
             for rem in reminders:
@@ -39,17 +39,32 @@ class SchedulerService:
                 if trigger_time.tzinfo is None:
                     trigger_time = trigger_time.replace(tzinfo=timezone.utc)
                 
-                # STRICT check: If time has passed, delete it immediately.
                 if trigger_time > now:
+                    # Future reminder - schedule it
                     self._schedule_job(rem.id, rem.chat_id, rem.text, trigger_time)
                     count += 1
                 else:
+                    # Past reminder - bot was offline
+                    missed_count += 1
+                    try:
+                        await self.bot_app.bot.send_message(
+                            chat_id=rem.chat_id,
+                            text=(
+                                f"⚠️ <b>Пропущене нагадування!</b>\n"
+                                f"Бот був офлайн, коли мало спрацювати:\n\n"
+                                f"⏰ <i>{trigger_time.strftime('%d.%m %H:%M')} (UTC)</i>\n"
+                                f"📝 {rem.text}"
+                            ),
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.error(f"Could not send missed alert to {rem.chat_id}: {e}")
+                    
                     await session.delete(rem)
-                    deleted_count += 1
             
             await session.commit()
-            if deleted_count > 0:
-                logger.info(f"🗑 Deleted {deleted_count} expired reminders.")
+            if missed_count > 0:
+                logger.info(f"🔔 Notified users about {missed_count} missed reminders.")
             logger.info(f"✅ Restored {count} active reminders.")
 
     def _schedule_job(self, reminder_id: int, chat_id: int, text: str, run_date: datetime):
@@ -134,7 +149,6 @@ class SchedulerService:
     async def get_reminders_count(self, chat_id: int) -> int:
         """Returns the count of active reminders."""
         async with AsyncSessionLocal() as session:
-            # Efficient count
             from sqlalchemy import func
             stmt = select(func.count()).select_from(Reminder).where(Reminder.chat_id == chat_id)
             result = await session.execute(stmt)
@@ -142,20 +156,43 @@ class SchedulerService:
 
     async def delete_reminder_by_id(self, reminder_id: int):
         """Removes reminder from DB and Scheduler."""
-        # 1. Remove from APScheduler
         try:
             self.scheduler.remove_job(str(reminder_id))
             logger.info(f"🗑 Job {reminder_id} removed from scheduler.")
         except Exception:
-            pass # Job might be missing if server restarted or it just finished
+            pass 
 
-        # 2. Remove from DB
         async with AsyncSessionLocal() as session:
             rem = await session.get(Reminder, reminder_id)
             if rem:
                 await session.delete(rem)
                 await session.commit()
                 logger.info(f"🗑 Reminder {reminder_id} deleted from DB.")
+                return True
+            return False
+
+    async def get_active_reminders_string(self, chat_id: int, timezone_str: str) -> str:
+        """Helper to format reminders for AI Context"""
+        rems = await self.get_active_reminders(chat_id)
+        if not rems:
+            return "No active reminders."
+        
+        try:
+            local_tz = zoneinfo.ZoneInfo(timezone_str)
+        except:
+            local_tz = zoneinfo.ZoneInfo("UTC")
+            
+        result = ""
+        for r in rems:
+            if r.trigger_time.tzinfo is None:
+                # Assume UTC if naive
+                t = r.trigger_time.replace(tzinfo=zoneinfo.ZoneInfo("UTC"))
+            else:
+                t = r.trigger_time
+            
+            local_t = t.astimezone(local_tz).strftime("%Y-%m-%d %H:%M")
+            result += f"- ID: {r.id} | Time: {local_t} | Text: '{r.text}'\n"
+        return result
 
 # Global Instance
 scheduler_service = SchedulerService()
