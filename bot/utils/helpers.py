@@ -9,7 +9,6 @@ from bot.ai.openai_provider import OpenAIProvider
 from bot.ai.google_provider import GoogleProvider
 from config import DEFAULT_SETTINGS
 from telegram.constants import ParseMode
-
 logger = logging.getLogger(__name__)
 
 SYSTEM_OPENAI_KEY = os.getenv("OPENAI_API_KEY")
@@ -139,3 +138,29 @@ async def send_long_message(target, text: str, reply_markup=None, parse_mode=Par
         keyboard = reply_markup if i == len(parts) - 1 else None
         try: await send_func(part_to_send, reply_markup=keyboard, parse_mode=parse_mode)
         except: await send_func(part.replace('<','').replace('>',''), reply_markup=keyboard, parse_mode=None)
+
+async def beautify_text(user_id: int, text: int) -> str:
+    """Використовує AI для логічного форматування тексту (абзаци)"""
+    provider = await get_ai_provider(user_id)
+    if not provider:
+        return text
+    
+    messages = [
+        {"role": "system", "content": DEFAULT_SETTINGS['beautify_prompt']},
+        {"role": "user", "content": text}
+    ]
+    
+    settings = {
+        'model': 'gpt-4o-mini',
+        'temperature': 0.3,
+        'allow_search': False
+    }
+    
+    result = ""
+    try:
+        async for chunk in provider.generate_stream(messages, settings):
+            result += chunk
+        return result.strip() if result else text
+    except Exception as e:
+        logger.error(f"Beautify error: {e}")
+        return text
