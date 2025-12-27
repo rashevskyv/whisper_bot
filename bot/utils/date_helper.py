@@ -1,44 +1,40 @@
 import dateparser
 import datetime
-import zoneinfo
 import logging
+import zoneinfo
 from config import BOT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-def calculate_future_date(query: str, user_timezone: str = None) -> str:
+def calculate_future_date(local_dt_string: str, user_timezone: str = None) -> str:
     """
-    Parses natural language date query and returns ISO string in UTC.
-    Example: "субота 15:00" -> "2025-12-27T15:00:00+00:00"
+    Takes an absolute LOCAL datetime string from AI and converts it to UTC ISO.
+    AI must provide YYYY-MM-DD HH:MM:SS format.
     """
     tz_str = user_timezone or BOT_TIMEZONE
     try:
-        # Налаштування парсера:
-        # PREFER_DATES_FROM = 'future' змушує "суботу" бути наступною суботою, а не минулою
-        settings = {
-            'TIMEZONE': tz_str,
-            'TO_TIMEZONE': 'UTC',
-            'RETURN_AS_TIMEZONE_AWARE': True,
-            'PREFER_DATES_FROM': 'future', 
-            'PREFER_DAY_OF_MONTH': 'first'
-        }
+        # 1. Parse string as naive datetime
+        # AI usually outputs '2025-12-28 00:09:00'
+        dt_naive = datetime.datetime.strptime(local_dt_string.strip(), '%Y-%m-%d %H:%M:%S')
         
-        # Парсимо
-        dt = dateparser.parse(query, settings=settings)
-        
-        if not dt:
-            return f"Error: Could not parse date from '{query}'"
+        # 2. Assign the user's timezone to the naive datetime
+        try:
+            user_tz = zoneinfo.ZoneInfo(tz_str)
+        except:
+            user_tz = zoneinfo.ZoneInfo("UTC")
             
-        # Перевірка, щоб не нагадувати в минулому (dateparser іноді може взяти сьогоднішній ранок)
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        if dt < now_utc:
-            # Якщо дата в минулому, спробуємо додати тиждень (якщо це день тижня) або день
-            # Але dateparser з PREFER_DATES_FROM='future' має це робити сам.
-            # Якщо все ж минуле - повертаємо як є, нехай AI вирішує, або повертаємо помилку.
-            pass
-
-        return dt.isoformat()
+        dt_localized = dt_naive.replace(tzinfo=user_tz)
+        
+        # 3. Convert to UTC
+        dt_utc = dt_localized.astimezone(datetime.timezone.utc)
+            
+        return dt_utc.isoformat()
         
     except Exception as e:
-        logger.error(f"Date parsing error: {e}")
-        return f"Error parsing date: {str(e)}"
+        logger.error(f"Date parsing fatal error for '{local_dt_string}': {e}")
+        # Try fallback to dateparser if AI didn't follow the format
+        try:
+            dt = dateparser.parse(local_dt_string, settings={'TIMEZONE': tz_str, 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
+            if dt: return dt.isoformat()
+        except: pass
+        return f"Error: Invalid date format. Use YYYY-MM-DD HH:MM:SS"
