@@ -108,11 +108,9 @@ class GoogleProvider(LLMProvider):
         model_name = settings.get('model', self.model_name)
         if 'gpt' in model_name: model_name = 'gemini-1.5-flash'
         
-        # Smart upgrade for reminders
         if settings.get('allow_search', True) and 'flash' in model_name.lower() and \
            any("нагадай" in m.get('content', '').lower() for m in messages[-2:]):
-             logger.info("⚡ Upgrading to Gemini-3-Pro for complex reminder logic")
-             model_name = 'gemini-3-pro-preview'
+             model_name = 'gemini-1.5-pro' # Upgrade to pro for tools
         
         temperature = settings.get('temperature', 0.7)
         current_lang = settings.get('language', 'uk')
@@ -122,23 +120,22 @@ class GoogleProvider(LLMProvider):
         system_instruction_text, history = self._map_messages(messages)
         try: tz = zoneinfo.ZoneInfo(user_tz_name)
         except: tz = datetime.timezone.utc
-            
         now_local = datetime.datetime.now(tz)
         current_time_str = f"{now_local.strftime('%Y-%m-%d (%A) %H:%M:%S')}"
 
         chat_id = settings.get('chat_id')
-        active_reminders_text = "None"
-        if chat_id:
-            active_reminders_text = await scheduler_service.get_active_reminders_string(chat_id, user_tz_name)
+        active_reminders_text = await scheduler_service.get_active_reminders_string(chat_id, user_tz_name) if chat_id else "None"
 
         tech_instruction = (
-            f"\n\n[SYSTEM INFO]\n"
-            f"- Local Time: {current_time_str} ({user_tz_name})\n"
-            f"- Language: '{current_lang}'\n"
-            f"- Active Reminders:\n{active_reminders_text}\n"
-            f"PROTOCOL FOR REMINDERS:\n"
-            f"1. To CREATE: Call `calculate_date` (include Day AND Time), then `schedule_reminder`.\n"
-            f"2. To CHANGE: Call `delete_reminder(id)` for the old one, then create a new one.\n"
+            f"\n\n[CONTEXT]\n"
+            f"- Current Time: {current_time_str}\n"
+            f"- Timezone: {user_tz_name}\n"
+            f"- Active Reminders: {active_reminders_text}\n"
+            f"REMINDER PROTOCOL:\n"
+            f"1. YOU ARE NOT A TIME PARSER. If user asks for a reminder, you MUST use `calculate_date`.\n"
+            f"2. Extract only the time part (e.g. 'через годину') and send it as query.\n"
+            f"3. After receiving ISO date, call `schedule_reminder`.\n"
+            f"4. Do not apologize for not knowing time; just use the tools."
         )
         full_sys_inst = (system_instruction_text or "") + tech_instruction
 
