@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, Optional, List, Dict, Any
+from typing import AsyncGenerator, List, Dict, Any
 
 class LLMProvider(ABC):
     """
@@ -36,10 +36,12 @@ class LLMProvider(ABC):
         self, 
         image_path: str, 
         prompt: str,
-        messages: List[Dict[str, str]] = None
+        messages: List[Dict[str, str]] = None,
+        settings: Dict[str, Any] = None
     ) -> AsyncGenerator[str, None]:
         """
         Аналізує зображення разом з текстовим промптом.
+        :param settings: Налаштування, щоб вибрати правильну модель (наприклад gpt-4o-mini).
         """
         pass
 

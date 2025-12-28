@@ -2,7 +2,7 @@ import logging
 from telegram import Update
 from telegram.constants import ParseMode, ChatAction
 from telegram.ext import ContextTypes
-from bot.utils.helpers import get_ai_provider, send_long_message, clean_html
+from bot.utils.helpers import get_ai_provider, send_long_message, clean_html, beautify_text
 from bot.utils.context import context_manager
 from bot.utils.media import download_file, cleanup_files
 from bot.handlers.common import get_user_model_settings, update_user_language
@@ -10,15 +10,17 @@ from config import DEFAULT_SETTINGS
 
 logger = logging.getLogger(__name__)
 
-async def stream_response(provider, messages, status_msg, user_id, settings, save_to_history=True):
-    """Генерує відповідь (стрімінг)"""
+async def stream_response(provider, messages, status_msg, user_id, chat_id, settings, save_to_history=True):
+    """
+    Генерує відповідь (стрімінг) з урахуванням chat_id для збереження історії.
+    """
     full_response = ""
     last_update_len = 0
     is_streaming_active = True
     
     try:
         async for chunk in provider.generate_stream(messages, settings):
-            # Обробка зміни мови
+            # Обробка зміни мови через інструмент
             if "__SET_LANGUAGE:" in chunk:
                 import re
                 match = re.search(r"__SET_LANGUAGE:(\w+)__", chunk)
@@ -29,16 +31,18 @@ async def stream_response(provider, messages, status_msg, user_id, settings, sav
             
             full_response += chunk
             
+            # Якщо текст занадто довгий, перестаємо оновлювати повідомлення в реальному часі,
+            # щоб не впертися в ліміти Telegram, але продовжуємо генерувати.
             if len(full_response) > 3800:
                 is_streaming_active = False
                 if last_update_len < 3800:
                      try:
                         await status_msg.edit_text(full_response[:3800] + "...\n(Генерується далі...)")
                         last_update_len = 4000 
-                     except:
-                        pass
+                     except: pass
             
-            if is_streaming_active and len(full_response) - last_update_len > 50:
+            # Оновлюємо повідомлення кожні ~80 символів
+            if is_streaming_active and len(full_response) - last_update_len > 80:
                 try:
                     await status_msg.edit_text(full_response + " ▌")
                     last_update_len = len(full_response)
@@ -57,7 +61,8 @@ async def stream_response(provider, messages, status_msg, user_id, settings, sav
             await send_long_message(status_msg.chat, full_response, parse_mode=ParseMode.HTML)
             
         if save_to_history:
-            await context_manager.save_message(user_id, 'assistant', full_response)
+            # Зберігаємо відповідь тільки в контекст поточного чату
+            await context_manager.save_message(user_id, chat_id, 'assistant', full_response)
             
     except Exception as e:
         logger.error(f"AI Error: {e}")
@@ -67,30 +72,37 @@ async def stream_response(provider, messages, status_msg, user_id, settings, sav
             pass
 
 async def process_gpt_request(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, manual_text: str = None):
+    """Основна функція обробки текстових запитів"""
     provider = await get_ai_provider(user_id)
     if not provider:
         return
         
+    chat_id = update.effective_chat.id
+    
     if update.callback_query:
         msg_func = update.callback_query.message.reply_text
     else:
         msg_func = update.message.reply_text
         
     status_msg = await msg_func("⏳")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     
     settings = await get_user_model_settings(user_id)
     settings['user_id'] = user_id
-    settings['chat_id'] = update.effective_chat.id
-    messages = await context_manager.get_context(user_id, limit=20)
+    settings['chat_id'] = chat_id
+    
+    # Отримуємо контекст, специфічний для цього чату
+    messages = await context_manager.get_context(user_id, chat_id, limit=20)
     
     if manual_text:
         messages.append({"role": "user", "content": manual_text})
         
-    await stream_response(provider, messages, status_msg, user_id, settings)
+    await stream_response(provider, messages, status_msg, user_id, chat_id, settings)
 
 async def summarize_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text_to_summarize: str):
+    """Функція для кнопки 'Підсумувати'"""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     provider = await get_ai_provider(user_id)
     if not provider:
         return
@@ -104,11 +116,14 @@ async def summarize_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     
     settings = await get_user_model_settings(user_id)
     settings['allow_search'] = False 
+    settings['chat_id'] = chat_id
     
-    await stream_response(provider, messages, status_msg, user_id, settings, save_to_history=False)
+    await stream_response(provider, messages, status_msg, user_id, chat_id, settings, save_to_history=False)
 
 async def reword_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text_to_reword: str):
+    """Функція для кнопки 'Переформулювати'"""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     provider = await get_ai_provider(user_id)
     if not provider:
         return
@@ -122,11 +137,14 @@ async def reword_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text_t
     
     settings = await get_user_model_settings(user_id)
     settings['allow_search'] = False
+    settings['chat_id'] = chat_id
     
-    await stream_response(provider, messages, status_msg, user_id, settings, save_to_history=False)
+    await stream_response(provider, messages, status_msg, user_id, chat_id, settings, save_to_history=False)
 
 async def process_photo_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str):
+    """Обробка фото (Опис або OCR) через меню"""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     provider = await get_ai_provider(user_id)
     if not provider:
         return
@@ -150,8 +168,8 @@ async def process_photo_analysis(update: Update, context: ContextTypes.DEFAULT_T
 
     status_msg = await menu_message.reply_text("👀 Дивлюсь...", quote=True)
     
-    prompt = "Опиши детально." if mode == "desc" else "Випиши текст."
-    action = "[Опис фото]" if mode == "desc" else "[OCR]"
+    prompt = "Опиши детально, що на зображенні." if mode == "desc" else "Випиши весь текст з зображення."
+    action_label = "[User asked for Photo Description]" if mode == "desc" else "[User asked for OCR]"
     
     temp_files = []
     try:
@@ -159,7 +177,8 @@ async def process_photo_analysis(update: Update, context: ContextTypes.DEFAULT_T
         image_path = await download_file(tg_file, f"photo_{photo_message.message_id}")
         temp_files.append(image_path)
         
-        messages = await context_manager.get_context(user_id, limit=5)
+        # Отримуємо контекст чату для розуміння запиту
+        messages = await context_manager.get_context(user_id, chat_id, limit=5)
         full_response = ""
         last_update_len = 0
         
@@ -173,7 +192,6 @@ async def process_photo_analysis(update: Update, context: ContextTypes.DEFAULT_T
                 except Exception:
                     pass
                     
-        # Фіналізація
         if len(full_response) <= 4000:
             try:
                 safe_text = clean_html(full_response)
@@ -184,8 +202,9 @@ async def process_photo_analysis(update: Update, context: ContextTypes.DEFAULT_T
             await status_msg.delete()
             await send_long_message(menu_message.chat, full_response, parse_mode=ParseMode.HTML)
             
-        await context_manager.save_message(user_id, 'user', action)
-        await context_manager.save_message(user_id, 'assistant', full_response)
+        # Зберігаємо дію та результат в історію чату
+        await context_manager.save_message(user_id, chat_id, 'user', action_label)
+        await context_manager.save_message(user_id, chat_id, 'assistant', full_response)
         
     except Exception as e:
         logger.error(f"Vision error: {e}")
