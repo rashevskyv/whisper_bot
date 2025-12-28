@@ -27,7 +27,7 @@ class OpenAIProvider(LLMProvider):
         finally: await temp.close()
 
     def _get_tools_schema(self, allow_search: bool) -> List[Dict[str, Any]]:
-        return [
+        tools = [
             {
                 "type": "function",
                 "function": {
@@ -68,16 +68,19 @@ class OpenAIProvider(LLMProvider):
                         "required": ["reminder_id"]
                     }
                 }
-            },
-            {
+            }
+        ]
+        
+        if allow_search:
+            tools.append({
                 "type": "function",
                 "function": {
                     "name": "web_search",
                     "description": "Search web.",
                     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
-                } if allow_search else None
-            }
-        ]
+                }
+            })
+        return tools
 
     async def generate_stream(self, messages: List[Dict[str, str]], settings: Dict[str, Any]) -> AsyncGenerator[str, None]:
         model = settings.get('model', 'gpt-4o-mini')
@@ -85,7 +88,6 @@ class OpenAIProvider(LLMProvider):
         chat_id = settings.get('chat_id')
         user_id = settings.get('user_id')
 
-        # Use stronger model for reasoning if needed
         if any("нагадай" in m.get('content', '').lower() for m in messages[-2:]):
              model = 'gpt-4o'
 
@@ -98,19 +100,18 @@ class OpenAIProvider(LLMProvider):
         active_reminders_text = await scheduler_service.get_active_reminders_string(chat_id, user_tz_name) if chat_id else "None"
 
         local_messages = [msg.copy() for msg in messages]
-        
-        # 1. System Prompt (Static rules)
         sys_idx = next((i for i, m in enumerate(local_messages) if m['role'] == 'system'), None)
+        
         system_base = (
-            "STRICT RULES:\n"
-            "1. You are a precise assistant. DO NOT hallucinate the current time.\n"
-            "2. For reminders: calculate the target time based on the [REAL-TIME CLOCK] provided in the last message.\n"
-            "3. First call `calculate_date`, then `schedule_reminder` with its result."
+            "SYSTEM INSTRUCTIONS:\n"
+            "1. Be helpful and concise.\n"
+            "2. For reminders: ALWAYS use the [REAL-TIME CLOCK] from the latest message to calculate absolute time.\n"
+            "3. If now is 00:25 and user says 'in 1 min', you MUST calculate 00:26.\n"
+            "4. Tool order: calculate_date -> schedule_reminder."
         )
         if sys_idx is not None: local_messages[sys_idx]['content'] += f"\n{system_base}"
         else: local_messages.insert(0, {"role": "system", "content": system_base})
 
-        # 2. Dynamic Clock Injection (Placed as the LAST context before AI starts thinking)
         clock_metadata = (
             f"--- [REAL-TIME CLOCK] ---\n"
             f"Current Local Time: {current_time_meta}\n"
@@ -118,13 +119,13 @@ class OpenAIProvider(LLMProvider):
             f"Active Reminders:\n{active_reminders_text}\n"
             f"--- END METADATA ---"
         )
-        # We find the last user message and prepend clock info to it
+        
         for msg in reversed(local_messages):
             if msg['role'] == 'user':
                 msg['content'] = f"{clock_metadata}\n\nUSER REQUEST: {msg['content']}"
                 break
 
-        tools = [t for t in self._get_tools_schema(settings.get('allow_search', True)) if t]
+        tools = self._get_tools_schema(settings.get('allow_search', True))
 
         try:
             stream = await self.client.chat.completions.create(
@@ -185,7 +186,7 @@ class OpenAIProvider(LLMProvider):
                 stream = await self.client.chat.completions.create(model=model, messages=local_messages, tools=tools, stream=True)
         except Exception as e:
             logger.error(f"AI Stream Error: {e}")
-            yield f"⚠️ Помилка: {e}"
+            yield f"⚠️ Помилка AI: {e}"
 
     async def transcribe(self, audio_path: str, language: str = None) -> str:
         try:
@@ -194,12 +195,26 @@ class OpenAIProvider(LLMProvider):
             return res.text
         except Exception as e: return f"Error: {e}"
 
-    async def analyze_image(self, image_path: str, prompt: str, messages: List[Dict[str, str]] = None) -> AsyncGenerator[str, None]:
+    async def analyze_image(self, image_path: str, prompt: str, messages: List[Dict[str, str]] = None, settings: Dict[str, Any] = None) -> AsyncGenerator[str, None]:
         try:
             with open(image_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode('utf-8')
-            msg = [{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}]
-            stream = await self.client.chat.completions.create(model="gpt-4o", messages=msg, max_tokens=1000, stream=True)
+            
+            # Use user-selected model if it supports vision, else default to mini
+            user_model = settings.get('model', 'gpt-4o-mini') if settings else 'gpt-4o-mini'
+            vision_model = user_model if user_model in ['gpt-4o', 'gpt-4o-mini'] else 'gpt-4o-mini'
+            
+            content = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]
+            
+            req_msgs = []
+            if messages:
+                for m in messages:
+                    if m['role'] == 'system': req_msgs.append(m)
+                    elif m['role'] in ['user', 'assistant']: req_msgs.append({"role": m['role'], "content": m['content']})
+            req_msgs.append({"role": "user", "content": content})
+            
+            stream = await self.client.chat.completions.create(model=vision_model, messages=req_msgs, max_tokens=1000, stream=True)
             async for chunk in stream:
                 if chunk.choices[0].delta.content: yield chunk.choices[0].delta.content
-        except Exception as e: yield f"⚠️ Error: {e}"
+        except Exception as e:
+            logger.error(f"Vision error: {e}"); yield f"⚠️ Error: {e}"

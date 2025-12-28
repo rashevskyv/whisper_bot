@@ -1,18 +1,21 @@
 import logging
 import os
+import warnings
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, Application, ConversationHandler
 from telegram.request import HTTPXRequest
+from telegram.warnings import PTBUserWarning
+
 from bot.database.session import init_db
 from bot.handlers.commands import start
 from bot.utils.scheduler import scheduler_service
 
-# Імпорти з нових модулів
+# Handlers
 from bot.handlers.text import handle_text, handle_internal_task
 from bot.handlers.media import handle_voice_video, handle_photo
 from bot.handlers.callbacks import handle_callback
 
-# Імпорти налаштувань
+# Settings Handlers
 from bot.handlers.settings import (
     settings_menu, keys_menu, ask_for_key, save_key, delete_key, 
     reset_context_handler, cancel_conversation, close_menu,
@@ -24,16 +27,15 @@ from bot.handlers.settings import (
     WAITING_FOR_KEY, WAITING_FOR_CUSTOM_MODEL, WAITING_FOR_CUSTOM_PROMPT, WAITING_FOR_TIMEZONE
 )
 from config import TOKEN
-import warnings
-from telegram.warnings import PTBUserWarning
 
-# Ігноруємо попередження про per_message
+# Ігноруємо попередження
 warnings.filterwarnings("ignore", category=PTBUserWarning)
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+# Зменшуємо шум від бібліотек
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
@@ -51,7 +53,6 @@ def main():
         print("❌ Помилка: Не задано BOT_TOKEN в .env!")
         return
 
-    # ЗБІЛЬШЕНО ТАЙМАУТИ ДО 120 СЕКУНД ДЛЯ СТАБІЛЬНОСТІ
     req = HTTPXRequest(
         connection_pool_size=8,
         connect_timeout=120.0, 
@@ -92,7 +93,6 @@ def main():
     )
     app.add_handler(custom_prompt_conv)
 
-    # Timezone Conversation
     timezone_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_custom_timezone, pattern="^ask_custom_tz$")],
         states={WAITING_FOR_TIMEZONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_custom_timezone)]},
@@ -130,18 +130,21 @@ def main():
     app.add_handler(CallbackQueryHandler(transcription_menu, pattern="^transcription_menu$"))
     app.add_handler(CallbackQueryHandler(set_transcription_model, pattern="^set_trans_"))
 
-    # --- Пріоритетні повідомлення ---
-    # 1. Внутрішні задачі від Userbot (відео з TikTok/Insta)
-    app.add_handler(MessageHandler(filters.VIDEO & filters.CaptionRegex(r"^task_id:"), handle_internal_task))
+    # --- Пріоритетні повідомлення (Юзербот) ---
+    # ВИПРАВЛЕНО: filters.Document.ALL замість filters.DOCUMENT
+    app.add_handler(MessageHandler(
+        (filters.VIDEO | filters.Document.ALL | filters.ANIMATION | filters.PHOTO) & filters.CaptionRegex(r"^task_id:"), 
+        handle_internal_task
+    ))
 
     # 2. Медіа (Голосові, Відео, Фото)
     app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE, handle_voice_video))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    # 3. Текст та посилання (YouTube/Twitter, Меню)
+    # 3. Текст та посилання
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
-    # --- Callbacks (Кнопки під повідомленнями) ---
+    # --- Callbacks ---
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     print("✅ Бот запущено! Натисніть Ctrl+C для зупинки.")
