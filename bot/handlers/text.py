@@ -17,8 +17,9 @@ from config import BOT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-USERBOT_REGEX = re.compile(r'(https?://(www\.)?(instagram\.com|tiktok\.com|pin\.it|pinterest\.com)/[^\s]+)')
-DIRECT_REGEX = re.compile(r'(https?://(www\.)?(youtube\.com|youtu\.be|twitter\.com|x\.com)/[^\s]+)')
+# ВИПРАВЛЕНО: Додано підтримку піддоменів (vm., vt., m. тощо)
+USERBOT_REGEX = re.compile(r'https?://(?:[\w-]+\.)?(instagram\.com|tiktok\.com|pin\.it|pinterest\.com)/[^\s]+')
+DIRECT_REGEX = re.compile(r'https?://(?:[\w-]+\.)?(youtube\.com|youtu\.be|twitter\.com|x\.com)/[^\s]+')
 
 async def handle_internal_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробляє медіа, які переслав Userbot"""
@@ -113,7 +114,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Оберіть пункт:", reply_markup=get_main_menu_keyboard())
         return
 
-    # 3. Пряме завантаження (YouTube, Twitter)
+    # 3. Userbot (Instagram, TikTok) - ПРІОРИТЕТ ВИЩЕ
+    # Перевіряємо TikTok/Insta ДО Youtube/Twitter, щоб випадково не сплутати
+    userbot_match = USERBOT_REGEX.search(text)
+    if userbot_match:
+        link = userbot_match.group(0)
+        async with AsyncSessionLocal() as session:
+            queue_item = DownloadQueue(
+                user_id=chat_id, 
+                message_id=update.message.message_id, 
+                link=link, 
+                status="pending"
+            )
+            session.add(queue_item)
+            await session.commit()
+        if is_private:
+            await update.message.reply_text(f"🔗 Передав юзерботу...", quote=True)
+        return
+
+    # 4. Пряме завантаження (YouTube, Twitter)
     direct_match = DIRECT_REGEX.search(text)
     if direct_match:
         url = direct_match.group(0)
@@ -148,22 +167,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Direct download error: {e}")
             if is_private and status_msg: await status_msg.edit_text("❌ Помилка.")
-        return
-
-    # 4. Userbot (Instagram, TikTok)
-    userbot_match = USERBOT_REGEX.search(text)
-    if userbot_match:
-        async with AsyncSessionLocal() as session:
-            queue_item = DownloadQueue(
-                user_id=chat_id, # Відправляємо в цей чат
-                message_id=update.message.message_id, 
-                link=userbot_match.group(0), 
-                status="pending"
-            )
-            session.add(queue_item)
-            await session.commit()
-        if is_private:
-            await update.message.reply_text(f"🔗 Передав юзерботу...", quote=True)
         return
 
     # 5. AI Chat

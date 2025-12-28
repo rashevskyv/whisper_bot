@@ -20,7 +20,6 @@ BOT_MONKETT = "monkettbot"
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Userbot")
 
-# Встановлюємо робочу директорію явно, щоб файл сесії створювався там де треба
 if os.path.exists("userbot.py"):
     os.chdir(os.path.dirname(os.path.abspath("userbot.py")))
 
@@ -31,7 +30,7 @@ def get_target_bot(link: str) -> str:
     link = link.lower()
     if any(d in link for d in ["twitter.com", "x.com", "9gag.com", "bsky.app"]):
         return BOT_MONKETT
-    return BOT_SAVEAS # TikTok, Insta, Pinterest
+    return BOT_SAVEAS 
 
 async def process_queue():
     """Фонова задача обробки черги"""
@@ -45,7 +44,6 @@ async def process_queue():
     while True:
         try:
             task = None
-            # Використовуємо окрему сесію для читання, щоб не тримати лок
             async with AsyncSessionLocal() as session:
                 result = await session.execute(
                     select(DownloadQueue).where(DownloadQueue.status == "pending").limit(1)
@@ -53,7 +51,6 @@ async def process_queue():
                 task = result.scalar_one_or_none()
                 
                 if task:
-                    # Одразу помічаємо як в обробці
                     task.status = "processing"
                     await session.commit()
 
@@ -62,47 +59,70 @@ async def process_queue():
                 logger.info(f"📌 Processing Task {task.id}: {task.link} via {target_bot}")
                 
                 try:
-                    # 1. Відправляємо посилання боту-помічнику
-                    # unblock на випадок, якщо бот був заблокований
+                    # 1. Відправляємо посилання
                     try: await app.unblock_user(target_bot)
                     except: pass
                     
                     sent_msg = await app.send_message(target_bot, task.link)
                     response_found = False
                     
-                    # 2. Чекаємо на відповідь (до 30 ітерацій по 2 сек = 60 сек)
-                    for i in range(30):
+                    # 2. Чекаємо на відповідь (цикл очікування)
+                    # Чекаємо довше, щоб бот встиг вислати ВСІ файли (відео + аудіо)
+                    found_messages = []
+                    
+                    for i in range(20): # 40 секунд макс
                         await asyncio.sleep(2)
                         
-                        # Перевіряємо останні 5 повідомлень від бота
-                        found_media = False
+                        # Отримуємо історію
+                        history = []
                         async for msg in app.get_chat_history(target_bot, limit=5):
-                            # Шукаємо повідомлення, яке прийшло ПІСЛЯ нашого запиту
-                            if msg.id > sent_msg.id:
-                                # Ігноруємо текстові "Зачекайте...", шукаємо медіа
-                                if msg.video or msg.document or msg.photo or msg.animation or msg.audio:
-                                    logger.info(f"✅ Media found inside history! Forwarding to main bot...")
-                                    try:
-                                        # Копіюємо медіа основному боту з ID задачі
-                                        await msg.copy(
-                                            MAIN_BOT_USERNAME, 
-                                            caption=f"task_id:{task.id}"
-                                        )
-                                        response_found = True
-                                        found_media = True
-                                    except Exception as fwd_err:
-                                        logger.error(f"Forward to main bot failed: {fwd_err}")
-                                    break
-                                elif msg.text and "error" in msg.text.lower():
-                                    logger.warning(f"Bot returned error text: {msg.text}")
-                                    response_found = True # Це теж відповідь, хоч і помилка
-                                    found_media = True
-                                    break
+                            history.append(msg)
                         
-                        if found_media:
+                        # Фільтруємо повідомлення, що прийшли ПІСЛЯ нашого запиту
+                        new_messages = [m for m in history if m.id > sent_msg.id]
+                        
+                        # Шукаємо серед них медіа
+                        media_messages = [
+                            m for m in new_messages 
+                            if m.video or m.document or m.photo or m.animation or m.audio
+                        ]
+                        
+                        if media_messages:
+                            # Якщо знайшли медіа, чекаємо ще трохи (2 сек), щоб переконатися, що це все
+                            # SaveAsBot іноді шле Відео, а через секунду Аудіо.
+                            await asyncio.sleep(2)
+                            
+                            # Робимо повторний запит історії, щоб забрати догружене
+                            final_history = []
+                            async for msg in app.get_chat_history(target_bot, limit=6):
+                                if msg.id > sent_msg.id and (msg.video or msg.document or msg.photo or msg.animation or msg.audio):
+                                    final_history.append(msg)
+                            
+                            found_messages = final_history
                             break
+                        
+                        # Перевірка на помилку текстом
+                        error_msgs = [m for m in new_messages if m.text and "error" in m.text.lower()]
+                        if error_msgs:
+                            logger.warning(f"Bot returned error: {error_msgs[0].text}")
+                            response_found = True # Вважаємо це відповіддю, щоб закрити задачу
+                            break
+
+                    # 3. Обробка знайдених повідомлень
+                    if found_messages:
+                        logger.info(f"✅ Found {len(found_messages)} media files. Forwarding all...")
+                        # Сортуємо від старого до нового (щоб відео йшло перед аудіо, зазвичай)
+                        for msg in sorted(found_messages, key=lambda x: x.id):
+                            try:
+                                await msg.copy(
+                                    MAIN_BOT_USERNAME, 
+                                    caption=f"task_id:{task.id}"
+                                )
+                                response_found = True
+                            except Exception as fwd_err:
+                                logger.error(f"Forward failed: {fwd_err}")
                     
-                    # Оновлюємо статус в БД
+                    # 4. Оновлення статусу
                     async with AsyncSessionLocal() as session:
                         current_task = await session.get(DownloadQueue, task.id)
                         if current_task:
@@ -110,7 +130,7 @@ async def process_queue():
                             await session.commit()
                             
                     if not response_found:
-                        logger.warning(f"⚠️ Timeout waiting for {target_bot}")
+                        logger.warning(f"⚠️ Timeout: No media received from {target_bot}")
 
                 except Exception as e:
                     logger.error(f"Task Execution Error: {e}")
@@ -121,7 +141,6 @@ async def process_queue():
                             await session.commit()
 
             else:
-                # Якщо задач немає, спимо довше
                 await asyncio.sleep(3)
 
         except Exception as e:
@@ -130,11 +149,11 @@ async def process_queue():
 
 @app.on_message(filters.me & filters.command("ping"))
 async def ping(client, message):
-    await message.edit(f"Pong! Connected to {BOT_SAVEAS} & {BOT_MONKETT}")
+    await message.edit(f"Pong! Helper bots: {BOT_SAVEAS}, {BOT_MONKETT}")
 
 async def main():
     async with app:
-        logger.info("Userbot connected and listening...")
+        logger.info("Userbot connected.")
         await process_queue()
 
 if __name__ == "__main__":
