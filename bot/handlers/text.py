@@ -17,175 +17,150 @@ from config import BOT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-# ВИПРАВЛЕНО: Додано підтримку піддоменів (vm., vt., m. тощо)
-USERBOT_REGEX = re.compile(r'https?://(?:[\w-]+\.)?(instagram\.com|tiktok\.com|pin\.it|pinterest\.com)/[^\s]+')
+# ОНОВЛЕНИЙ REGEX: Більш "жадібний" та точний для різних піддоменів
+# Ловить: https://vm.tiktok.com/ABC, https://www.instagram.com/reel/XYZ, тощо.
+USERBOT_REGEX = re.compile(r'(https?://(?:www\.|vm\.|vt\.|m\.|mobile\.)?(?:instagram\.com|tiktok\.com|pin\.it|pinterest\.com)/[\w\d\-_./?=]+)')
 DIRECT_REGEX = re.compile(r'https?://(?:[\w-]+\.)?(youtube\.com|youtu\.be|twitter\.com|x\.com)/[^\s]+')
 
+def get_log_user(user, chat_id):
+    return f"[User: {user.id} ({user.first_name}) | Chat: {chat_id}]"
+
 async def handle_internal_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробляє медіа, які переслав Userbot"""
     message = update.message
     caption = message.caption or ""
     
-    if not caption.startswith("task_id:"):
-        return
+    if not caption.startswith("task_id:"): return
 
     try:
         task_id = int(caption.split(":")[1])
+        logger.info(f"📥 [MainBot] Received Task Result ID: {task_id}")
+
         async with AsyncSessionLocal() as session:
             task = await session.get(DownloadQueue, task_id)
             if task:
+                logger.info(f"   -> Forwarding to User {task.user_id}...")
                 try:
                     await context.bot.copy_message(
                         chat_id=task.user_id,
                         from_chat_id=message.chat_id,
                         message_id=message.message_id,
-                        caption="",
+                        caption="", 
                         reply_to_message_id=task.message_id
                     )
-                except Exception:
-                    await context.bot.copy_message(
-                        chat_id=task.user_id,
-                        from_chat_id=message.chat_id,
-                        message_id=message.message_id,
-                        caption=""
-                    )
+                    logger.info(f"✅ [MainBot] Delivery Success.")
+                except Exception as e:
+                    logger.error(f"❌ [MainBot] Forward Error: {e}")
+                    # Fallback
+                    try: await context.bot.copy_message(chat_id=task.user_id, from_chat_id=message.chat_id, message_id=message.message_id, caption="")
+                    except: pass
+            else:
+                logger.warning(f"⚠️ [MainBot] Task {task_id} not found in DB.")
         await message.delete()
     except Exception as e:
-        logger.error(f"Internal task error: {e}")
+        logger.error(f"❌ [MainBot] Internal Handler Error: {e}")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Основний обробник тексту"""
-    if not update.message or not update.message.text:
-        return
-        
+    if not update.message or not update.message.text: return
     user = update.effective_user
-    text = update.message.text
+    text = update.message.text.strip()
     chat_id = update.effective_chat.id
     is_private = update.effective_chat.type == 'private'
+    user_log = get_log_user(user, chat_id)
     
-    # 1. Список Нагадувань
+    logger.info(f"📩 {user_log} Message: '{text}'")
+    
+    # 1. Reminders
     if text == "⏰ Нагадування":
-        reminders = await scheduler_service.get_active_reminders(chat_id)
-        if not reminders:
-            kb = ReplyKeyboardMarkup([[KeyboardButton("⚙️ Налаштування")]], resize_keyboard=True, is_persistent=True)
-            await update.message.reply_text("📭 Немає активних нагадувань.", reply_markup=kb)
+        rems = await scheduler_service.get_active_reminders(chat_id)
+        if not rems:
+            await update.message.reply_text("📭 Немає активних нагадувань.", quote=True)
             return
-
         settings = await get_user_model_settings(user.id)
-        user_tz_str = settings.get('timezone', BOT_TIMEZONE)
-        try: local_tz = zoneinfo.ZoneInfo(user_tz_str)
-        except: local_tz = zoneinfo.ZoneInfo("UTC")
-
-        days_map = {
-            "Monday": "Пн", "Tuesday": "Вт", "Wednesday": "Ср", 
-            "Thursday": "Чт", "Friday": "Пт", "Saturday": "Сб", "Sunday": "Нд"
-        }
-
-        msg = f"<b>📅 Активні нагадування ({user_tz_str}):</b>\n\n"
-        keyboard = []
-        for rem in reminders:
-            t_utc = rem.trigger_time.replace(tzinfo=timezone.utc) if rem.trigger_time.tzinfo is None else rem.trigger_time
-            local_dt = t_utc.astimezone(local_tz)
-            
-            weekday_name = local_dt.strftime("%A")
-            short_weekday = days_map.get(weekday_name, weekday_name[:2])
-            local_time_str = local_dt.strftime(f"{short_weekday}, %d.%m %H:%M")
-            
-            short_text = (rem.text[:25] + '..') if len(rem.text) > 25 else rem.text
-            
-            msg += f"🕒 <b>{local_time_str}</b>: {rem.text}\n"
-            keyboard.append([InlineKeyboardButton(f"❌ {local_time_str} | {short_text}", callback_data=f"del_rem_{rem.id}")])
-        
-        keyboard.append([InlineKeyboardButton("🔙 Закрити", callback_data="close_menu")])
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        tz_str = settings.get('timezone', BOT_TIMEZONE)
+        try: l_tz = zoneinfo.ZoneInfo(tz_str)
+        except: l_tz = zoneinfo.ZoneInfo("UTC")
+        msg = f"<b>📅 Активні нагадування ({tz_str}):</b>\n\n"
+        kb = []
+        days = {"Monday":"Пн","Tuesday":"Вт","Wednesday":"Ср","Thursday":"Чт","Friday":"Пт","Saturday":"Сб","Sunday":"Нд"}
+        for r in rems:
+            t = r.trigger_time.replace(tzinfo=timezone.utc) if r.trigger_time.tzinfo is None else r.trigger_time
+            l_dt = t.astimezone(l_tz)
+            d = days.get(l_dt.strftime("%A"), l_dt.strftime("%a"))
+            s = l_dt.strftime(f"{d}, %d.%m %H:%M")
+            msg += f"🕒 <b>{s}</b>: {r.text}\n"
+            kb.append([InlineKeyboardButton(f"❌ {s}", callback_data=f"del_rem_{r.id}")])
+        kb.append([InlineKeyboardButton("🔙 Закрити", callback_data="close_menu")])
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML", quote=True)
         return
 
-    # 2. Меню Налаштувань
-    keywords = ["налаштування", "меню", "настройки", "settings", "menu", "⚙️ налаштування"]
-    if text.lower().strip() in keywords:
-        has_reminders = await scheduler_service.get_reminders_count(chat_id) > 0
-        buttons_row = [KeyboardButton("⚙️ Налаштування")]
-        if has_reminders:
-            buttons_row.insert(0, KeyboardButton("⏰ Нагадування"))
-
-        reply_keyboard = ReplyKeyboardMarkup([buttons_row], resize_keyboard=True, is_persistent=True)
-        
-        await update.message.reply_text("⚙️ <b>Меню:</b>", reply_markup=reply_keyboard, parse_mode='HTML')
-        await update.message.reply_text("Оберіть пункт:", reply_markup=get_main_menu_keyboard())
+    # 2. Menu
+    if text.lower() in ["налаштування", "меню", "настройки", "settings", "menu", "⚙️ налаштування"]:
+        has_r = await scheduler_service.get_reminders_count(chat_id) > 0
+        btn = [KeyboardButton("⚙️ Налаштування")]
+        if has_r: btn.insert(0, KeyboardButton("⏰ Нагадування"))
+        await update.message.reply_text("⚙️ <b>Меню:</b>", reply_markup=ReplyKeyboardMarkup([btn], resize_keyboard=True), parse_mode='HTML', quote=True)
+        await update.message.reply_text("Оберіть пункт:", reply_markup=get_main_menu_keyboard(), quote=True)
         return
 
-    # 3. Userbot (Instagram, TikTok) - ПРІОРИТЕТ ВИЩЕ
-    # Перевіряємо TikTok/Insta ДО Youtube/Twitter, щоб випадково не сплутати
+    # 3. Userbot (TikTok/Insta) - ПРІОРИТЕТ 1
+    # Шукаємо лінк
     userbot_match = USERBOT_REGEX.search(text)
     if userbot_match:
         link = userbot_match.group(0)
-        async with AsyncSessionLocal() as session:
-            queue_item = DownloadQueue(
-                user_id=chat_id, 
-                message_id=update.message.message_id, 
-                link=link, 
-                status="pending"
-            )
-            session.add(queue_item)
-            await session.commit()
-        if is_private:
-            await update.message.reply_text(f"🔗 Передав юзерботу...", quote=True)
+        logger.info(f"🔗 {user_log} Userbot Link Detected: {link}")
+        
+        try:
+            async with AsyncSessionLocal() as session:
+                queue_item = DownloadQueue(
+                    user_id=chat_id, 
+                    message_id=update.message.message_id, 
+                    link=link, 
+                    status="pending"
+                )
+                session.add(queue_item)
+                await session.commit()
+                # Примусово рефрешимо, щоб переконатися, що ID створено
+                await session.refresh(queue_item)
+                logger.info(f"💾 {user_log} Task Saved to DB (ID: {queue_item.id}). Link: {link}")
+            
+            if is_private:
+                await update.message.reply_text(f"🔗 Передав юзерботу...", quote=True)
+                
+        except Exception as db_err:
+            logger.error(f"❌ {user_log} DB Error while saving task: {db_err}")
+            if is_private: await update.message.reply_text(f"❌ Помилка бази даних: {db_err}", quote=True)
+        
         return
 
-    # 4. Пряме завантаження (YouTube, Twitter)
+    # 4. Direct DL
     direct_match = DIRECT_REGEX.search(text)
     if direct_match:
         url = direct_match.group(0)
-        status_msg = None
-        if is_private:
-            status_msg = await update.message.reply_text("⏳ Завантажую...", quote=True)
-        
+        logger.info(f"🔗 {user_log} Direct DL Link: {url}")
+        status = await update.message.reply_text("⏳ Завантажую...", quote=True) if is_private else None
         try:
-            media_info = await download_media_direct(url)
-            if media_info and os.path.exists(media_info['path']):
-                if status_msg: await status_msg.edit_text("📤 Відправляю...")
-                
+            media = await download_media_direct(url)
+            if media and os.path.exists(media['path']):
+                if status: await status.edit_text("📤 Відправляю...")
                 try:
-                    if media_info['type'] == 'video':
-                        await update.message.reply_video(
-                            video=open(media_info['path'], 'rb'),
-                            reply_to_message_id=update.message.message_id
-                        )
-                    else:
-                        await update.message.reply_document(
-                            document=open(media_info['path'], 'rb'),
-                            reply_to_message_id=update.message.message_id
-                        )
-                except Exception:
-                    pass 
-                
-                if status_msg: await status_msg.delete()
-                try: os.remove(media_info['path'])
+                    if media['type'] == 'video': await update.message.reply_video(video=open(media['path'], 'rb'), reply_to_message_id=update.message.message_id)
+                    else: await update.message.reply_document(document=open(media['path'], 'rb'), reply_to_message_id=update.message.message_id)
                 except: pass
+                if status: await status.delete()
+                os.remove(media['path'])
             else:
-                if is_private and status_msg: await status_msg.edit_text("❌ Не вдалося завантажити.")
+                if status: await status.edit_text("❌ Не вдалося.")
         except Exception as e:
-            logger.error(f"Direct download error: {e}")
-            if is_private and status_msg: await status_msg.edit_text("❌ Помилка.")
+            logger.error(f"DL Error: {e}")
+            if status: await status.edit_text("❌ Помилка.")
         return
 
-    # 5. AI Chat
+    # 5. AI
     if should_respond(update, context):
-        final_prompt = text
-        
-        # Обробка цитування (Reply)
+        p = text
         if update.message.reply_to_message:
-            reply_msg = update.message.reply_to_message
-            quoted_text = reply_msg.text or reply_msg.caption or "[Медіа файл]"
-            quoted_author = reply_msg.from_user.full_name if reply_msg.from_user else "Unknown"
-            
-            final_prompt = (
-                f"--- QUOTED MESSAGE FROM {quoted_author} ---\n"
-                f"{quoted_text}\n"
-                f"--- END QUOTE ---\n\n"
-                f"USER REQUEST: {text}"
-            )
-        
-        # Зберігаємо повідомлення в контекст поточного чату
-        await context_manager.save_message(user.id, chat_id, 'user', final_prompt)
+            r = update.message.reply_to_message
+            name = r.from_user.full_name if r.from_user else "User"
+            p = f"--- QUOTE ({name}) ---\n{r.text or r.caption}\n--- END ---\n\nUSER: {text}"
+        await context_manager.save_message(user.id, chat_id, 'user', p)
         await process_gpt_request(update, context, user.id)

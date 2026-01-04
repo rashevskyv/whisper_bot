@@ -7,13 +7,10 @@ from config import TEMP_DIR
 logger = logging.getLogger(__name__)
 
 async def download_media_direct(url: str) -> dict:
-    """
-    Завантажує відео/фото через yt-dlp.
-    Повертає словник: {'path': str, 'type': 'video'|'photo', 'caption': None}
-    """
     loop = asyncio.get_running_loop()
     
-    # Налаштування yt-dlp для обходу блокувань
+    logger.info(f"📥 [Downloader] Starting download for: {url}")
+    
     ydl_opts = {
         'outtmpl': os.path.join(TEMP_DIR, '%(id)s.%(ext)s'),
         'format': 'best[filesize<50M]/best',
@@ -21,9 +18,7 @@ async def download_media_direct(url: str) -> dict:
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'ignoreerrors': True,
-        
-        # Емуляція iOS клієнта (допомагає від 403)
+        'ignoreerrors': False, # Want to catch errors
         'extractor_args': {
             'youtube': {
                 'player_client': ['ios', 'web_creator'],
@@ -40,23 +35,19 @@ async def download_media_direct(url: str) -> dict:
     def _download():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
-                # 1. Інфо
                 info = ydl.extract_info(url, download=False)
                 if not info:
+                    logger.warning(f"⚠️ [Downloader] No info extracted for {url}")
                     return None
                 
-                # 2. Скачування
                 info = ydl.extract_info(url, download=True)
-                if not info:
-                    return None
+                if not info: return None
 
                 filename = ydl.prepare_filename(info)
-                
                 if not os.path.exists(filename):
+                    logger.error(f"❌ [Downloader] File not found after download: {filename}")
                     return None
 
-                # ПРИБРАНО: Формування caption з HTML тегами.
-                # Повертаємо чисте відео.
                 return {
                     'path': filename,
                     'type': 'video', 
@@ -64,8 +55,8 @@ async def download_media_direct(url: str) -> dict:
                     'caption': None 
                 }
             except Exception as e:
-                # Логуємо помилку тихо, щоб не спамити в консоль, якщо це картинка
-                # logger.error(f"yt-dlp error: {e}")
+                # ЛОГУЄМО КОНКРЕТНУ ПОМИЛКУ ЗАВАНТАЖЕННЯ (Twitter/YouTube)
+                logger.error(f"❌ [Downloader] yt-dlp failed for {url}: {e}")
                 return None
 
     return await loop.run_in_executor(None, _download)
