@@ -50,47 +50,38 @@ async def get_ai_provider(user_id: int, for_transcription: bool = False):
         return GoogleProvider(api_key=api_key, model_name=model) if provider_type == 'google' else OpenAIProvider(api_key=api_key)
 
 def clean_html(text: str) -> str:
-    """Очищає текст від заборонених тегів та мінімізує порожні рядки."""
     if not text: return ""
-    
-    # Конвертація базового Markdown, якщо AI його помилково використав
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'#{1,6}\s?(.*)', r'<b>\1</b>', text)
-    
-    # Видалення HTML структурних тегів
     text = re.sub(r'<(html|head|body|meta|doctype|style|script|link).*?>', '', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'</(html|head|body|meta|style|script|link)>', '', text, flags=re.IGNORECASE)
-    
-    # Заміна блочних тегів на одинарний перенос рядка (зменшуємо 'повітря')
     text = text.replace("<ul>", "").replace("</ul>", "")
     text = text.replace("<ol>", "").replace("</ol>", "")
     text = text.replace("<li>", "• ").replace("</li>", "\n")
     text = text.replace("<div>", "").replace("</div>", "\n")
     text = text.replace("<p>", "").replace("</p>", "\n")
     text = text.replace("<br>", "\n").replace("<br/>", "\n")
-    
-    # Очищення заголовків
     text = re.sub(r'<h[1-6]>(.*?)</h[1-6]>', r'<b>\1</b>\n', text)
-    
-    # Видалення залишків Markdown коду
     text = text.replace("```html", "").replace("```", "")
-    
-    # ФІНАЛЬНИЙ ЕТАП: Видалення зайвих порожніх рядків (більше 2 підряд)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    
     return text.strip()
 
-async def send_long_message(target, text: str, reply_markup=None, parse_mode=ParseMode.HTML):
+async def send_long_message(target, text: str, reply_markup=None, parse_mode=ParseMode.HTML, reply_to_msg_id=None):
+    """
+    Відправляє повідомлення, розбиваючи його на частини.
+    Завжди намагається відповісти на reply_to_msg_id, якщо він переданий.
+    """
     text = clean_html(text)
-    if hasattr(target, 'reply_text'): send_func = target.reply_text
-    else: send_func = target.send_message
+    
+    if hasattr(target, 'reply_text'): 
+        send_func = target.reply_text
+        # Якщо target - це повідомлення, воно саме по собі має ID
+        if not reply_to_msg_id:
+            reply_to_msg_id = target.message_id
+    else: 
+        send_func = target.send_message
     
     LIMIT = 4000
-    if len(text) <= LIMIT:
-        try: await send_func(text, reply_markup=reply_markup, parse_mode=parse_mode)
-        except: await send_func(text, reply_markup=reply_markup, parse_mode=None)
-        return
-
     parts = []
     inner_text = text
     while inner_text:
@@ -100,16 +91,45 @@ async def send_long_message(target, text: str, reply_markup=None, parse_mode=Par
         parts.append(inner_text[:pos])
         inner_text = inner_text[pos:].strip()
 
-    for part in parts:
-        await send_func(part, reply_markup=reply_markup if part == parts[-1] else None, parse_mode=parse_mode)
+    for i, part in enumerate(parts):
+        kb = reply_markup if i == len(parts) - 1 else None
+        
+        # Основні аргументи
+        kwargs = {
+            'text': part,
+            'reply_markup': kb,
+            'parse_mode': parse_mode
+        }
+        
+        # Для першої частини (або якщо повідомлення коротке) робимо реплай
+        # Для наступних частин довгих повідомлень реплай не обов'язковий, щоб не спамити
+        if reply_to_msg_id and i == 0:
+            kwargs['reply_to_message_id'] = reply_to_msg_id
+        
+        try: 
+            if hasattr(target, 'reply_text'):
+                # reply_text робить реплай автоматично, але ми можемо явно вказати quote
+                await send_func(**kwargs, quote=True)
+            else:
+                await send_func(**kwargs)
+        except Exception as e: 
+            logger.error(f"Send message error: {e}")
+            # Fallback без HTML, якщо парсинг не вдався
+            kwargs['parse_mode'] = None
+            if hasattr(target, 'reply_text'):
+                try: await send_func(**kwargs, quote=True)
+                except: await send_func(**kwargs)
+            else:
+                await send_func(**kwargs)
 
 async def beautify_text(user_id: int, text: str) -> str:
+    if not text or len(text.strip()) < 5: return text
     provider = await get_ai_provider(user_id)
     if not provider: return text
     messages = [{"role": "system", "content": DEFAULT_SETTINGS['beautify_prompt']}, {"role": "user", "content": text}]
     result = ""
     try:
-        async for chunk in provider.generate_stream(messages, {'model': 'gpt-4o-mini', 'temperature': 0.3, 'allow_search': False}):
+        async for chunk in provider.generate_stream(messages, {'model': 'gpt-4o-mini', 'temperature': 0.0, 'allow_search': False}):
             result += chunk
         return result.strip() if result else text
     except: return text

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = update.effective_user
-    chat_id = update.effective_chat.id # Отримуємо ID чату
+    chat_id = update.effective_chat.id
     
     if query.data == "delete_msg":
         await query.message.delete()
@@ -42,6 +42,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             days = {"Monday":"Пн","Tuesday":"Вт","Wednesday":"Ср","Thursday":"Чт","Friday":"Пт","Saturday":"Сб","Sunday":"Нд"}
             
             for rem in active_rems:
+                # Конвертація часу для відображення
                 trigger_time = rem.trigger_time
                 if trigger_time.tzinfo is None:
                     trigger_time = trigger_time.replace(tzinfo=zoneinfo.ZoneInfo("UTC"))
@@ -60,29 +61,38 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "run_gpt":
         await query.answer("Відправляю боту...")
-        await query.message.edit_reply_markup(None)
+        # Прибираємо кнопки, щоб не натиснути двічі
+        try: await query.message.edit_reply_markup(None)
+        except: pass
         
-        # ВИПРАВЛЕНО: Додано chat_id
+        # 1. Знаходимо текст транскрипції (який був схований під роллю 'transcription')
         transcription_text = await context_manager.get_last_transcription(user.id, chat_id)
         if not transcription_text:
+            # Якщо в базі не знайшли, пробуємо взяти з тексту самого повідомлення
             transcription_text = query.message.text
             
-        await process_gpt_request(update, context, user.id, manual_text=None)
+        if transcription_text:
+            # 2. "Легалізуємо" текст: зберігаємо як повідомлення користувача
+            await context_manager.save_message(user.id, chat_id, 'user', transcription_text)
+            
+            # 3. Запускаємо ШІ
+            await process_gpt_request(update, context, user.id, manual_text=None)
+        else:
+             await query.message.reply_text("❌ Помилка: текст втрачено.")
         
     elif query.data == "summarize":
         await query.answer("Роблю вижимку...")
-        # ВИПРАВЛЕНО: Додано chat_id
         transcription_text = await context_manager.get_last_transcription(user.id, chat_id)
         if not transcription_text: transcription_text = query.message.text
             
         if transcription_text:
+            # Для summary ми НЕ зберігаємо це в історію діалогу, це окрема операція
             await summarize_text(update, context, transcription_text)
         else:
             await query.message.reply_text("❌ Помилка: не знайдено текст.")
             
     elif query.data == "reword":
         await query.answer("Переписую...")
-        # ВИПРАВЛЕНО: Додано chat_id
         transcription_text = await context_manager.get_last_transcription(user.id, chat_id)
         if not transcription_text: transcription_text = query.message.text
             

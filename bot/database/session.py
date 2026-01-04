@@ -1,12 +1,13 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
 from config import DB_PATH
 from .models import Base
 import logging
 
 logger = logging.getLogger(__name__)
 
-# URL для підключення (sqlite+aiosqlite для асинхронності)
+# URL для підключення
 DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 engine = create_async_engine(DATABASE_URL, echo=False)
@@ -17,14 +18,19 @@ AsyncSessionLocal = sessionmaker(
 )
 
 async def init_db():
-    """Ініціалізація БД (створення таблиць)"""
+    """Ініціалізація БД та увімкнення WAL режиму для швидкодії"""
     async with engine.begin() as conn:
-        # await conn.run_sync(Base.metadata.drop_all) # Розкоментувати для повного скидання
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("База даних ініціалізована.")
+        
+    # Вмикаємо Write-Ahead Logging (WAL) для роботи в кілька процесів
+    async with engine.connect() as conn:
+        await conn.execute(text("PRAGMA journal_mode=WAL;"))
+        await conn.execute(text("PRAGMA synchronous=NORMAL;"))
+        await conn.commit()
+        
+    logger.info("✅ База даних ініціалізована (WAL mode enabled).")
 
 async def get_db():
-    """Генератор сесій для використання в хендлерах"""
     async with AsyncSessionLocal() as session:
         try:
             yield session
