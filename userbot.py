@@ -14,8 +14,12 @@ API_HASH = os.getenv("API_HASH")
 SESSION_NAME = "my_userbot"
 MAIN_BOT_USERNAME = os.getenv("MAIN_BOT_USERNAME")
 
-BOT_SAVEAS = "SaveAsBot"
-BOT_MONKETT = "monkettbot"
+# Ланцюжки ботів (Пріоритет -> Резерв -> Резерв)
+BOT_CHAINS = {
+    "twitter": ["monkettbot", "SaveAsBot", "GoSeaverBot"],
+    "tiktok": ["SaveAsBot", "ttsavebot", "GoSeaverBot"],
+    "default": ["SaveAsBot", "GoSeaverBot"]
+}
 
 # Логування в stdout
 logging.basicConfig(
@@ -30,11 +34,14 @@ if os.path.exists("userbot.py"):
 
 app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
 
-def get_target_bot(link: str) -> str:
+def get_target_bots(link: str) -> list[str]:
+    """Повертає список ботів для спроби завантаження"""
     link = link.lower()
-    if any(d in link for d in ["twitter.com", "x.com", "9gag.com", "bsky.app"]):
-        return BOT_MONKETT
-    return BOT_SAVEAS 
+    if any(d in link for d in ["twitter.com", "x.com"]):
+        return BOT_CHAINS["twitter"]
+    if "tiktok.com" in link:
+        return BOT_CHAINS["tiktok"]
+    return BOT_CHAINS["default"]
 
 async def process_queue():
     logger.info(f"🚀 [Userbot] Queue Processor STARTED.")
@@ -44,14 +51,12 @@ async def process_queue():
         logger.error("❌ [Userbot] MAIN_BOT_USERNAME not set in .env!")
         return
 
-    # Лічильник для heartbeat логів
     tick = 0
 
     while True:
         try:
             task = None
             
-            # ВІДКРИВАЄМО НОВУ СЕСІЮ ДЛЯ КОЖНОЇ ПЕРЕВІРКИ
             async with AsyncSessionLocal() as session:
                 try:
                     result = await session.execute(
@@ -60,14 +65,10 @@ async def process_queue():
                     task = result.scalar_one_or_none()
                     
                     if task:
-                        # Якщо знайшли задачу - блокуємо її
                         task.status = "processing"
                         await session.commit()
-                        # Оновлюємо об'єкт, щоб мати доступ до полів поза сесією
                         await session.refresh(task) 
                     else:
-                        # ВАЖЛИВО: Навіть якщо нічого не знайшли, робимо commit,
-                        # щоб завершити транзакцію і оновити snapshot бази (для WAL режиму)
                         await session.commit()
                         
                 except Exception as db_e:
@@ -75,90 +76,100 @@ async def process_queue():
                     await asyncio.sleep(1)
                     continue
 
-            # Лог "пульсу" кожні ~30 секунд (15 циклів по 2 сек), щоб бачити що бот живий
             tick += 1
             if tick % 15 == 0 and not task:
                 logger.info(f"💓 [Userbot] Alive. Checking queue... (No tasks)")
 
             if task:
-                target_bot = get_target_bot(task.link)
+                target_bots = get_target_bots(task.link)
                 logger.info(f"📥 [Userbot] TAKING TASK #{task.id} -> {task.link}")
+                logger.info(f"   -> Strategy: { ' -> '.join(['@'+b for b in target_bots]) }")
                 
-                try:
-                    # 1. Unblock & Send
-                    try: await app.unblock_user(target_bot)
-                    except: pass
+                final_status = "failed"
+                
+                # --- ЦИКЛ ПО БОТАХ (RETRY LOGIC) ---
+                for bot_username in target_bots:
+                    logger.info(f"🔄 [Userbot] Trying provider: @{bot_username}...")
                     
-                    logger.info(f"📤 [Userbot] Sending to @{target_bot}...")
-                    sent_msg = await app.send_message(target_bot, task.link)
-                    
-                    response_found = False
-                    found_messages = []
-                    
-                    # 2. Wait Loop
-                    for i in range(25): # 50 sec max
-                        await asyncio.sleep(2)
+                    try:
+                        # 1. Unblock & Send
+                        try: await app.unblock_user(bot_username)
+                        except: pass
                         
-                        history = []
-                        async for msg in app.get_chat_history(target_bot, limit=5):
-                            history.append(msg)
+                        sent_msg = await app.send_message(bot_username, task.link)
                         
-                        new_messages = [m for m in history if m.id > sent_msg.id]
+                        response_found = False
+                        found_messages = []
                         
-                        media_msgs = [
-                            m for m in new_messages 
-                            if m.video or m.document or m.photo or m.animation or m.audio or m.voice or m.video_note
-                        ]
-                        
-                        if media_msgs:
-                            logger.info(f"   -> Detected media! Waiting 2s for batch...")
+                        # 2. Wait Loop (30 sec per bot)
+                        # Зменшив час очікування, щоб швидше переходити до резервного бота
+                        for i in range(15): 
                             await asyncio.sleep(2)
                             
-                            final_history = []
-                            async for msg in app.get_chat_history(target_bot, limit=8):
-                                if msg.id > sent_msg.id:
-                                    if msg.video or msg.document or msg.photo or msg.animation or msg.audio or msg.voice or msg.video_note:
-                                        final_history.append(msg)
+                            history = []
+                            async for msg in app.get_chat_history(bot_username, limit=5):
+                                history.append(msg)
                             
-                            found_messages = final_history
-                            break
-                        
-                        errs = [m for m in new_messages if m.text and "error" in m.text.lower()]
-                        if errs:
-                            logger.warning(f"❌ [Userbot] Bot error: {errs[0].text}")
-                            response_found = True
-                            break
+                            new_messages = [m for m in history if m.id > sent_msg.id]
+                            
+                            media_msgs = [
+                                m for m in new_messages 
+                                if m.video or m.document or m.photo or m.animation or m.audio or m.voice or m.video_note
+                            ]
+                            
+                            if media_msgs:
+                                logger.info(f"   -> Media detected from @{bot_username}! Gathering batch...")
+                                await asyncio.sleep(2)
+                                
+                                final_history = []
+                                async for msg in app.get_chat_history(bot_username, limit=8):
+                                    if msg.id > sent_msg.id:
+                                        if msg.video or msg.document or msg.photo or msg.animation or msg.audio or msg.voice or msg.video_note:
+                                            final_history.append(msg)
+                                
+                                found_messages = final_history
+                                break
+                            
+                            # Check generic errors
+                            errs = [m for m in new_messages if m.text and any(x in m.text.lower() for x in ["error", "не знайшов", "not found"])]
+                            if errs:
+                                logger.warning(f"❌ [Userbot] @{bot_username} returned error: {errs[0].text[:50]}...")
+                                # Якщо бот явно сказав "помилка", немає сенсу чекати далі - йдемо до наступного
+                                break
 
-                    # 3. Forwarding
-                    if found_messages:
-                        logger.info(f"✅ [Userbot] Found {len(found_messages)} files. Forwarding...")
-                        
-                        for msg in sorted(found_messages, key=lambda x: x.id):
-                            try:
-                                await msg.copy(
-                                    MAIN_BOT_USERNAME, 
-                                    caption=f"task_id:{task.id}"
-                                )
-                                response_found = True
-                                logger.info(f"      -> Sent MsgID {msg.id}")
-                            except Exception as fwd_err:
-                                logger.error(f"      -> ❌ Forward Failed: {fwd_err}")
-                    
-                    # 4. Update Status
-                    async with AsyncSessionLocal() as session:
-                        current_task = await session.get(DownloadQueue, task.id)
-                        if current_task:
-                            current_task.status = "done" if response_found else "timeout"
-                            await session.commit()
-                            logger.info(f"💾 [Userbot] Task {task.id} finished as: {current_task.status}")
+                        # 3. Forwarding if found
+                        if found_messages:
+                            logger.info(f"✅ [Userbot] Success with @{bot_username}. Forwarding {len(found_messages)} files...")
+                            
+                            for msg in sorted(found_messages, key=lambda x: x.id):
+                                try:
+                                    await msg.copy(
+                                        MAIN_BOT_USERNAME, 
+                                        caption=f"task_id:{task.id}"
+                                    )
+                                    response_found = True
+                                except Exception as fwd_err:
+                                    logger.error(f"      -> ❌ Forward Failed: {fwd_err}")
+                            
+                            if response_found:
+                                final_status = "done"
+                                break # ВИХОДИМО З ЦИКЛУ БОТІВ, ЯКЩО ВСЕ ОК
+                        else:
+                            logger.warning(f"⚠️ [Userbot] Timeout or no media from @{bot_username}. Switching to next...")
 
-                except Exception as e:
-                    logger.error(f"❌ [Userbot] Task Processing Error: {e}")
-                    async with AsyncSessionLocal() as session:
-                        t = await session.get(DownloadQueue, task.id)
-                        if t:
-                            t.status = "error"
-                            await session.commit()
+                    except Exception as e:
+                        logger.error(f"❌ [Userbot] Error with @{bot_username}: {e}")
+                        # Continue to next bot
+                
+                # --- UPDATE DB ---
+                async with AsyncSessionLocal() as session:
+                    current_task = await session.get(DownloadQueue, task.id)
+                    if current_task:
+                        # Якщо жоден бот не впорався - timeout/failed
+                        current_task.status = "done" if final_status == "done" else "timeout"
+                        await session.commit()
+                        logger.info(f"💾 [Userbot] Task {task.id} FINAL status: {current_task.status}")
+
             else:
                 await asyncio.sleep(2)
 
