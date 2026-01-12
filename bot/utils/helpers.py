@@ -67,20 +67,12 @@ def clean_html(text: str) -> str:
     return text.strip()
 
 async def send_long_message(target, text: str, reply_markup=None, parse_mode=ParseMode.HTML, reply_to_msg_id=None):
-    """
-    Відправляє повідомлення, розбиваючи його на частини.
-    Завжди намагається відповісти на reply_to_msg_id, якщо він переданий.
-    """
     text = clean_html(text)
+    if hasattr(target, 'reply_text'): send_func = target.reply_text; reply_id = target.message_id
+    else: send_func = target.send_message; reply_id = None
     
-    if hasattr(target, 'reply_text'): 
-        send_func = target.reply_text
-        # Якщо target - це повідомлення, воно саме по собі має ID
-        if not reply_to_msg_id:
-            reply_to_msg_id = target.message_id
-    else: 
-        send_func = target.send_message
-    
+    if reply_to_msg_id: reply_id = reply_to_msg_id
+
     LIMIT = 4000
     parts = []
     inner_text = text
@@ -93,43 +85,32 @@ async def send_long_message(target, text: str, reply_markup=None, parse_mode=Par
 
     for i, part in enumerate(parts):
         kb = reply_markup if i == len(parts) - 1 else None
-        
-        # Основні аргументи
-        kwargs = {
-            'text': part,
-            'reply_markup': kb,
-            'parse_mode': parse_mode
-        }
-        
-        # Для першої частини (або якщо повідомлення коротке) робимо реплай
-        # Для наступних частин довгих повідомлень реплай не обов'язковий, щоб не спамити
-        if reply_to_msg_id and i == 0:
-            kwargs['reply_to_message_id'] = reply_to_msg_id
+        kwargs = {'text': part, 'reply_markup': kb, 'parse_mode': parse_mode}
+        if reply_id and i == 0: kwargs['reply_to_message_id'] = reply_id
         
         try: 
-            if hasattr(target, 'reply_text'):
-                # reply_text робить реплай автоматично, але ми можемо явно вказати quote
-                await send_func(**kwargs, quote=True)
-            else:
-                await send_func(**kwargs)
-        except Exception as e: 
-            logger.error(f"Send message error: {e}")
-            # Fallback без HTML, якщо парсинг не вдався
+            if hasattr(target, 'reply_text'): await send_func(**kwargs, quote=True)
+            else: await send_func(**kwargs)
+        except: 
             kwargs['parse_mode'] = None
-            if hasattr(target, 'reply_text'):
-                try: await send_func(**kwargs, quote=True)
-                except: await send_func(**kwargs)
-            else:
-                await send_func(**kwargs)
+            if hasattr(target, 'reply_text'): await send_func(**kwargs)
+            else: await send_func(**kwargs)
 
 async def beautify_text(user_id: int, text: str) -> str:
-    if not text or len(text.strip()) < 5: return text
+    """Тільки пунктуація. Інструменти ВИМКНЕНО."""
+    if not text or len(text.strip()) < 2: return text
+    
     provider = await get_ai_provider(user_id)
     if not provider: return text
-    messages = [{"role": "system", "content": DEFAULT_SETTINGS['beautify_prompt']}, {"role": "user", "content": text}]
+    
+    messages = [
+        {"role": "system", "content": DEFAULT_SETTINGS['beautify_prompt']},
+        {"role": "user", "content": text}
+    ]
     result = ""
     try:
-        async for chunk in provider.generate_stream(messages, {'model': 'gpt-4o-mini', 'temperature': 0.0, 'allow_search': False}):
+        # ВАЖЛИВО: disable_tools=True
+        async for chunk in provider.generate_stream(messages, {'model': 'gpt-4o-mini', 'temperature': 0.0, 'allow_search': False, 'disable_tools': True}):
             result += chunk
         return result.strip() if result else text
     except: return text
