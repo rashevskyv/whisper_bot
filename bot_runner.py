@@ -24,6 +24,7 @@ from bot.handlers.settings import (
     language_menu, set_language_gui, 
     transcription_menu, set_transcription_model,
     timezone_menu, set_timezone_btn, ask_custom_timezone, save_custom_timezone,
+    toggle_debug,
     WAITING_FOR_KEY, WAITING_FOR_CUSTOM_MODEL, WAITING_FOR_CUSTOM_PROMPT, WAITING_FOR_TIMEZONE
 )
 from config import TOKEN
@@ -117,9 +118,10 @@ def main():
     app.add_handler(CallbackQueryHandler(set_timezone_btn, pattern="^set_tz_"))
     app.add_handler(CallbackQueryHandler(transcription_menu, pattern="^transcription_menu$"))
     app.add_handler(CallbackQueryHandler(set_transcription_model, pattern="^set_trans_"))
+    
+    app.add_handler(CallbackQueryHandler(toggle_debug, pattern="^toggle_debug$"))
 
     # --- Handlers ---
-    # Internal Task (Userbot) - Приймає будь-яке медіа з підписом task_id
     app.add_handler(MessageHandler(
         filters.CaptionRegex(r"^task_id:"), 
         handle_internal_task

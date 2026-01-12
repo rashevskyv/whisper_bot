@@ -24,21 +24,35 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 BOT_TRIGGERS = ["бот", "bot", "gpt", "асистент"]
 
+# ЧАТ МОДЕЛІ
 AVAILABLE_MODELS = {
     "openai": {
         "common": ["gpt-4o-mini"],
         "advanced": ["gpt-4o", "gpt-4-turbo"]
     },
     "google": [
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash-exp"
+        "gemini-3-pro-preview",   # Залишено
+        "gemini-3-flash-preview", # Залишено
+        "gemini-2.5-pro",         # ДОДАНО gemini-2.5-pro
+        "gemini-flash-latest",       # ДОДАНО gemini-2.5-flash
+        "gemini-flash-lite-latest",       # ДОДАНО gemini-2.5-flash
     ]
 }
 
+# МОДЕЛІ ТРАНСКРИБАЦІЇ
 TRANSCRIPTION_MODELS = {
-    "openai": ["whisper-1"],
-    "google": ["gemini-1.5-flash"]
+    "openai": [
+        "whisper-1", 
+        "gpt-4o-transcribe", 
+        "gpt-4o-mini-transcribe"
+    ],
+    "google": [
+        "gemini-3-pro-preview",   # Залишено
+        "gemini-3-flash-preview",
+        "gemini-2.5-pro",         # ДОДАНО gemini-2.5-pro
+        "gemini-flash-latest",       # ДОДАНО gemini-2.5-flash
+        "gemini-flash-lite-latest",       # ДОДАНО gemini-2.5-flash
+    ]
 }
 
 COMMON_INSTRUCTION = (
@@ -77,6 +91,7 @@ DEFAULT_SETTINGS = {
     'language': 'uk',
     'system_prompt': PERSONAS['assistant']['prompt'],
     'allow_search': True,
+    'show_model_name': False,
     
     'summary_prompt': (
         "Ти — аналітик. Перетвори текст на стислий звіт.\n"
@@ -93,15 +108,13 @@ DEFAULT_SETTINGS = {
         "3. Формат: Тільки чистий HTML."
     ),
 
-    # ЗМІНЕНО: Абсолютна заборона на виконання команд
     'beautify_prompt': (
         "You are a verbatim text formatter. Your ONLY job is to add punctuation and capitalization.\n"
         "STRICT RULES:\n"
         "1. DO NOT interpret the text. DO NOT answer questions.\n"
-        "2. DO NOT execute commands (like 'remind me', 'create list').\n"
-        "3. DO NOT add headers, intros, or outros.\n"
-        "4. If the text says 'Remind me to buy milk', output 'Remind me to buy milk.' (NOT 'Reminder set').\n"
-        "5. Output ONLY the raw formatted text."
+        "2. DO NOT execute commands.\n"
+        "3. DO NOT add headers.\n"
+        "4. Output ONLY the raw formatted text."
     ),
 
     'transcription_prompt': (

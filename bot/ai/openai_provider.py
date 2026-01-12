@@ -81,9 +81,7 @@ class OpenAIProvider(LLMProvider):
         user_tz_name = settings.get('timezone', BOT_TIMEZONE)
         chat_id = settings.get('chat_id')
         user_id = settings.get('user_id')
-        
-        # Перевірка на відключення інструментів
-        disable_tools = settings.get('disable_tools', False)
+        disable_tools = settings.get('disable_tools', False) # ПРАПОРЕЦЬ
 
         # Upgrade model logic (only if tools are enabled)
         if not disable_tools and any("нагадай" in m.get('content', '').lower() for m in messages[-2:]):
@@ -101,7 +99,7 @@ class OpenAIProvider(LLMProvider):
 
         local_messages = [msg.copy() for msg in messages]
         
-        # System Prompt Injection
+        # System Prompt Injection (base)
         sys_idx = next((i for i, m in enumerate(local_messages) if m['role'] == 'system'), None)
         system_base = "STRICT RULES: Be helpful and concise."
         
@@ -111,15 +109,21 @@ class OpenAIProvider(LLMProvider):
         if sys_idx is not None: local_messages[sys_idx]['content'] += f"\n{system_base}"
         else: local_messages.insert(0, {"role": "system", "content": system_base})
 
-        # Clock Injection
-        clock_metadata = f"--- [REAL-TIME CLOCK] ---\nLocal Time: {current_time_meta}\nUser Timezone: {user_tz_name}\nActive Reminders: {active_reminders_text}\n--- END METADATA ---"
+        # Clock Injection (Metadata)
+        clock_metadata = (
+            f"--- [REAL-TIME CLOCK] ---\n"
+            f"Current Local Time: {current_time_meta}\n"
+            f"User Timezone: {user_tz_name}\n"
+            f"Active Reminders:\n{active_reminders_text}\n"
+            f"--- END METADATA ---"
+        )
         
         for msg in reversed(local_messages):
             if msg['role'] == 'user':
                 msg['content'] = f"{clock_metadata}\n\nUSER REQUEST: {msg['content']}"
                 break
 
-        # ВАЖЛИВО: Якщо tools вимкнено, передаємо None
+        # ВАЖЛИВО: tools = None, якщо disable_tools=True
         tools = self._get_tools_schema(settings.get('allow_search', True)) if not disable_tools else None
 
         try:
@@ -130,6 +134,8 @@ class OpenAIProvider(LLMProvider):
             while True:
                 tool_calls_buffer = {}
                 is_tool_call = False
+                response = None
+                
                 async for chunk in stream:
                     if not chunk.choices: continue
                     delta = chunk.choices[0].delta
@@ -142,12 +148,15 @@ class OpenAIProvider(LLMProvider):
                             if tc.function.name: tool_calls_buffer[idx]["name"] += tc.function.name
                             if tc.function.arguments: tool_calls_buffer[idx]["arguments"] += tc.function.arguments
                     if delta.content and not is_tool_call: yield delta.content
+                    response = chunk # Зберігаємо останній chunk (для usage)
+
+                # Логування використання токенів
+                if response and hasattr(response, 'usage') and response.usage:
+                    usage = response.usage
+                    logger.info(f"📊 [OpenAI] Usage: Prompt={usage.prompt_tokens}, Completion={usage.completion_tokens}, Total={usage.total_tokens}")
 
                 if not is_tool_call: break
 
-                # Якщо ми тут, значить були tools, але вони мали бути вимкнені? 
-                # Ні, якщо tools=None, сюди ми не дійдемо.
-                
                 tool_calls_list = [tool_calls_buffer[i] for i in sorted(tool_calls_buffer.keys())]
                 local_messages.append({"role": "assistant", "tool_calls": [{"id": tc["id"], "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}} for tc in tool_calls_list]})
 
@@ -184,7 +193,7 @@ class OpenAIProvider(LLMProvider):
                 stream = await self.client.chat.completions.create(model=model, messages=local_messages, tools=tools, stream=True)
         except Exception as e:
             logger.error(f"AI Stream Error: {e}")
-            yield f"⚠️ Помилка: {e}"
+            yield f"⚠️ Помилка AI: {e}"
 
     async def transcribe(self, audio_path: str, language: str = None) -> str:
         try:

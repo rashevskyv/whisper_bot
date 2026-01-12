@@ -15,6 +15,12 @@ async def stream_response(provider, messages, status_msg, user_id, chat_id, sett
     last_update_len = 0
     is_streaming_active = True
     
+    # Додаємо префікс, якщо увімкнено дебаг
+    if settings.get('show_model_name', False):
+        model_name = settings.get('model', 'unknown')
+        full_response = f"[{model_name}] "
+        last_update_len = len(full_response)
+    
     try:
         async for chunk in provider.generate_stream(messages, settings):
             if "__SET_LANGUAGE:" in chunk:
@@ -49,7 +55,6 @@ async def stream_response(provider, messages, status_msg, user_id, chat_id, sett
                 await status_msg.edit_text(full_response)
         else:
             await status_msg.delete()
-            # ТУТ ВАЖЛИВО: Передаємо ID для реплаю
             await send_long_message(status_msg.chat, full_response, parse_mode=ParseMode.HTML, reply_to_msg_id=reply_to_msg_id)
             
         if save_to_history:
@@ -66,13 +71,10 @@ async def process_gpt_request(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     chat_id = update.effective_chat.id
     
-    # Визначаємо ID повідомлення, на яке треба відповідати
     if update.callback_query:
-        # Якщо це кнопка, відповідаємо на повідомлення з кнопкою
         reply_to_id = update.callback_query.message.message_id
         msg_func = update.callback_query.message.reply_text
     else:
-        # Якщо це текст, відповідаємо на повідомлення користувача
         reply_to_id = update.message.message_id
         msg_func = update.message.reply_text
         
@@ -156,18 +158,23 @@ async def process_photo_analysis(update: Update, context: ContextTypes.DEFAULT_T
         temp_files.append(image_path)
         
         messages = await context_manager.get_context(user_id, chat_id, limit=5)
+        settings = await get_user_model_settings(user_id)
+        
         full_response = ""
         last_len = 0
         
-        async for chunk in provider.analyze_image(image_path, prompt, messages):
+        async for chunk in provider.analyze_image(image_path, prompt, messages, settings):
             full_response += chunk
             if len(full_response) - last_len > 50:
                 try: await status_msg.edit_text(full_response + " ▌"); last_len = len(full_response)
                 except: pass
                     
         await status_msg.delete()
-        # Реплай на меню (яке є реплаєм на фото), або прямо на фото? 
-        # Краще на повідомлення з меню, щоб зберегти ланцюжок.
+        
+        if settings.get('show_model_name', False):
+            model_name = settings.get('model', 'unknown')
+            full_response = f"[{model_name}]\n{full_response}"
+
         await send_long_message(menu_message.chat, full_response, parse_mode=ParseMode.HTML, reply_to_msg_id=menu_message.message_id)
         
         await context_manager.save_message(user_id, chat_id, 'user', f"Action: {mode}")

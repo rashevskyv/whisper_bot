@@ -43,36 +43,83 @@ def get_main_menu_keyboard():
             InlineKeyboardButton("🌍 Часовий пояс", callback_data="timezone_menu"),
             InlineKeyboardButton("🔑 Ключі API", callback_data="keys_menu")
         ],
+        [
+            InlineKeyboardButton("🐞 Показувати модель", callback_data="toggle_debug")
+        ],
         [InlineKeyboardButton("🔙 Закрити", callback_data="close_menu")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    
+    user_id = update.effective_user.id
+    is_admin = user_id in ADMIN_IDS
+    
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user_internal(session, user_id)
+        show_debug = user.settings.get('show_model_name', False)
+        
+    debug_icon = "✅" if show_debug else "❌"
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("🧠 Чат Модель", callback_data="model_menu"), 
+            InlineKeyboardButton("🎙 Транскрибація", callback_data="transcription_menu")
+        ],
+        [
+            InlineKeyboardButton("🌐 Мова", callback_data="lang_menu"), 
+            InlineKeyboardButton("🎭 Персона", callback_data="persona_menu")
+        ],
+        [
+            InlineKeyboardButton("🌍 Часовий пояс", callback_data="timezone_menu"),
+            InlineKeyboardButton("🔑 Ключі API", callback_data="keys_menu")
+        ]
+    ]
+    
+    if is_admin:
+        keyboard.append([
+            InlineKeyboardButton(f"{debug_icon} Режим налагодження", callback_data="toggle_debug")
+        ])
+        
+    keyboard.append([InlineKeyboardButton("🔙 Закрити", callback_data="close_menu")])
+    
     try:
         await query.edit_message_text(
             "⚙️ <b>Головні налаштування:</b>", 
-            reply_markup=get_main_menu_keyboard(), 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
             parse_mode='HTML'
         )
     except BadRequest:
         pass
 
+async def toggle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMIN_IDS:
+        await query.answer("🔒 Недостатньо прав.")
+        return
+        
+    new_state = False
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user_internal(session, user_id)
+        settings = dict(user.settings)
+        new_state = not settings.get('show_model_name', False)
+        settings['show_model_name'] = new_state
+        user.settings = settings
+        await session.commit()
+    
+    await query.answer(f"Відображення моделі: {'Ввімкнено' if new_state else 'Вимкнено'}")
+    await settings_menu(update, context)
+
 async def close_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    try:
-        await query.message.delete()
-    except:
-        pass
-
-# ... (transcription_menu, set_transcription_model, language_menu, set_language_gui БЕЗ ЗМІН) ...
-# Для економії місця не дублюю ці функції, вони лишаються як в попередньому варіанті, але якщо треба - напиши.
-# Я покажу лише ті де додав ЛОГИ.
+    try: await query.message.delete()
+    except: pass
 
 async def transcription_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # (Без змін, крім імпортів)
     query = update.callback_query
     user_id = update.effective_user.id
     async with AsyncSessionLocal() as session:
@@ -84,9 +131,10 @@ async def transcription_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         has_google_key = any(k.provider == 'google' for k in user_keys)
         is_admin = user_id in ADMIN_IDS
 
-    can_access_settings = is_admin or has_openai_key or has_google_key
+    can_access_openai = is_admin or has_openai_key
+    can_access_google = is_admin or has_google_key or bool(os.getenv("GOOGLE_API_KEY"))
     
-    if not can_access_settings:
+    if not can_access_openai and not can_access_google:
         text = ("🔒 <b>Доступ обмежено</b>\n\nЗміна моделі транскрибації доступна лише користувачам із власними API ключами.\n"f"Наразі використовується стандартна модель: <code>{current_model}</code>")
         keyboard = [[InlineKeyboardButton("🔑 Додати ключ", callback_data="keys_menu")],[InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")]]
         try: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
@@ -95,14 +143,18 @@ async def transcription_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = f"🎙 <b>Модель транскрибації:</b> <code>{current_model}</code>\n"
     if 'whisper' in current_model: text += "ℹ️ Whisper - спеціалізована модель для аудіо."
-    elif 'transcribe' in current_model: text += "ℹ️ GPT Audio - мультимодальна транскрибація."
-    else: text += "ℹ️ Gemini - мультимодальна (розуміє контекст)."
+    else: text += "ℹ️ Мультимодальна (розуміє контекст)."
 
     keyboard = []
-    if is_admin or has_openai_key:
-        for m in TRANSCRIPTION_MODELS['openai']: keyboard.append([InlineKeyboardButton(f"✅ {m}" if current_model == m else m, callback_data=f"set_trans_{m}")])
-    if is_admin or has_google_key:
-        for m in TRANSCRIPTION_MODELS['google']: keyboard.append([InlineKeyboardButton(f"✅ {m}" if current_model == m else m, callback_data=f"set_trans_{m}")])
+    if can_access_openai:
+        for m in TRANSCRIPTION_MODELS['openai']: 
+            label = f"✅ {m}" if current_model == m else m
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"set_trans_{m}")])
+    if can_access_google:
+        for m in TRANSCRIPTION_MODELS['google']: 
+            label = f"✅ {m}" if current_model == m else m
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"set_trans_{m}")])
+            
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
     try: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     except BadRequest: pass
@@ -114,12 +166,20 @@ async def set_transcription_model(update: Update, context: ContextTypes.DEFAULT_
     
     async with AsyncSessionLocal() as session:
         user = await get_or_create_user_internal(session, user_id)
+        is_admin = user_id in ADMIN_IDS
+        keys_res = await session.execute(select(APIKey).where(APIKey.user_id == user_id, APIKey.is_active == True))
+        has_key = any(k.provider == ('openai' if 'gpt' in new_model or 'whisper' in new_model else 'google') for k in keys_res.scalars().all()) or bool(os.getenv("GOOGLE_API_KEY"))
+
+        if not is_admin and not has_key and new_model != 'whisper-1':
+            await query.answer("🔒 Недостатньо прав для вибору цієї моделі. Додайте ключ.")
+            await transcription_menu(update, context)
+            return
+
         settings = dict(user.settings)
         settings['transcription_model'] = new_model
         user.settings = settings
         await session.commit()
     
-    logger.info(f"SETTING CHANGED: User {user_id} set transcription model to {new_model}")
     await query.answer(f"Транскрибація: {new_model}")
     await transcription_menu(update, context)
 
@@ -152,12 +212,10 @@ async def set_language_gui(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user.settings = settings
         await session.commit()
     
-    logger.info(f"SETTING CHANGED: User {user_id} set language to {new_lang}")
     await query.answer(f"Language changed to {new_lang}")
     await language_menu(update, context)
 
 async def model_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # (Код без змін, тільки логи можна не додавати тут, бо це перегляд)
     query = update.callback_query
     user_id = update.effective_user.id
     
@@ -167,19 +225,39 @@ async def model_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res_openai = await session.execute(select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == 'openai', APIKey.is_active == True))
         has_openai = res_openai.scalar_one_or_none() is not None
         res_google = await session.execute(select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == 'google', APIKey.is_active == True))
-        has_google_personal = res_google.scalar_one_or_none() is not None
+        has_google = res_google.scalar_one_or_none() is not None
         is_admin = user_id in ADMIN_IDS
-        has_google_system = bool(os.getenv("GOOGLE_API_KEY"))
-        gemini_available = has_google_system or has_google_personal or is_admin
+        
+        can_access_openai_advanced = has_openai or is_admin
+        can_access_google = bool(os.getenv("GOOGLE_API_KEY")) or has_google or is_admin
+
+    if not can_access_openai_advanced and not can_access_google and not bool(os.getenv("OPENAI_API_KEY")) and not is_admin:
+        text = ("🔒 <b>Доступ обмежено</b>\n\nДля вибору моделей потрібен ключ.\n"f"Наразі використовується: <code>{current_model}</code>")
+        keyboard = [[InlineKeyboardButton("🔑 Додати ключ", callback_data="keys_menu")],[InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")]]
+        try: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        except BadRequest: pass
+        return
 
     text = f"🤖 <b>Поточна модель:</b> <code>{current_model}</code>\n"
     keyboard = []
-    for m in AVAILABLE_MODELS['openai']['common']: keyboard.append([InlineKeyboardButton(f"✅ {m}" if current_model == m else m, callback_data=f"set_model_{m}")])
-    if has_openai or is_admin:
-        for m in AVAILABLE_MODELS['openai']['advanced']: keyboard.append([InlineKeyboardButton(f"✅ {m}" if current_model == m else m, callback_data=f"set_model_{m}")])
-    if gemini_available:
-        for m in AVAILABLE_MODELS['google']: keyboard.append([InlineKeyboardButton(f"✅ {m}" if current_model == m else m, callback_data=f"set_model_{m}")])
-    if has_openai or is_admin: keyboard.append([InlineKeyboardButton("✍️ Вписати свою...", callback_data="ask_custom_model")])
+    
+    # OpenAI Common (завжди доступно)
+    for m in AVAILABLE_MODELS['openai']['common']: 
+        keyboard.append([InlineKeyboardButton(f"✅ {m}" if current_model == m else m, callback_data=f"set_model_{m}")])
+    
+    # OpenAI Advanced 
+    if can_access_openai_advanced:
+        for m in AVAILABLE_MODELS['openai']['advanced']: 
+            keyboard.append([InlineKeyboardButton(f"✅ {m}" if current_model == m else m, callback_data=f"set_model_{m}")])
+    
+    # Gemini 
+    if can_access_google:
+        for m in AVAILABLE_MODELS['google']: 
+            keyboard.append([InlineKeyboardButton(f"✅ {m}" if current_model == m else m, callback_data=f"set_model_{m}")])
+            
+    if can_access_openai_advanced: 
+        keyboard.append([InlineKeyboardButton("✍️ Вписати свою...", callback_data="ask_custom_model")])
+    
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
     try: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     except BadRequest: pass
@@ -196,14 +274,10 @@ async def set_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user.settings = settings
         await session.commit()
     
-    logger.info(f"SETTING CHANGED: User {user_id} set chat model to {new_model}")
     await query.answer(f"Модель: {new_model}")
     await model_menu(update, context)
 
-# ... (persona_menu, set_persona, timezone_menu, set_timezone_btn etc - аналогічно додаємо логи)
-
 async def persona_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # (Без змін)
     query = update.callback_query
     user_id = update.effective_user.id
     async with AsyncSessionLocal() as session:
@@ -233,12 +307,10 @@ async def set_persona(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user = await get_or_create_user_internal(session, user_id)
             user.system_prompt = PERSONAS[key]['prompt']
             await session.commit()
-        logger.info(f"SETTING CHANGED: User {user_id} set persona to {key}")
         await query.answer(f"Режим: {PERSONAS[key]['name']}")
     await persona_menu(update, context)
 
 async def timezone_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # (Без змін)
     query = update.callback_query
     user_id = update.effective_user.id
     async with AsyncSessionLocal() as session:
@@ -267,7 +339,6 @@ async def set_timezone_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user.settings = settings
         await session.commit()
     
-    logger.info(f"SETTING CHANGED: User {user_id} set timezone to {new_tz}")
     await query.answer(f"Встановлено: {new_tz}")
     await timezone_menu(update, context)
 
@@ -300,11 +371,9 @@ async def save_custom_timezone(update: Update, context: ContextTypes.DEFAULT_TYP
         user.settings = settings
         await session.commit()
     
-    logger.info(f"SETTING CHANGED: User {user_id} set custom timezone to {tz_input}")
     await update.message.reply_text(f"✅ Часовий пояс змінено на {tz_input}")
     return ConversationHandler.END
 
-# ... (ask_custom_model, save_custom_model, ask_custom_prompt, save_custom_prompt, keys_menu, ask_for_key, save_key, delete_key, reset_context_handler, cancel_conversation БЕЗ ЗМІН, ТАМ ЛОГИ НЕ КРИТИЧНІ)
 async def ask_custom_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -323,7 +392,6 @@ async def save_custom_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
         settings['model'] = model
         user.settings = settings
         await session.commit()
-    logger.info(f"SETTING CHANGED: User {user_id} set custom model to {model}")
     await update.message.reply_text(f"✅ Модель встановлена: {model}")
     return ConversationHandler.END
 
@@ -343,7 +411,6 @@ async def save_custom_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user = await get_or_create_user_internal(session, user_id)
         user.system_prompt = prompt
         await session.commit()
-    logger.info(f"SETTING CHANGED: User {user_id} updated system prompt")
     await update.message.reply_text("✅ Системний промпт оновлено!")
     return ConversationHandler.END
 
@@ -395,7 +462,6 @@ async def save_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for k in old_keys.scalars().all(): await session.delete(k)
         session.add(APIKey(user_id=user_id, provider=provider, encrypted_key=encrypted, is_active=True))
         await session.commit()
-    logger.info(f"KEY ADDED: User {user_id} added {provider} key")
     await update.message.reply_text(f"✅ Ключ {provider} успішно збережено!")
     return ConversationHandler.END
 
@@ -407,7 +473,6 @@ async def delete_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         old_keys = await session.execute(select(APIKey).where(APIKey.user_id==user_id, APIKey.provider==provider))
         for k in old_keys.scalars().all(): await session.delete(k)
         await session.commit()
-    logger.info(f"KEY DELETED: User {user_id} deleted {provider} key")
     await query.answer("Ключ видалено!")
     await keys_menu(update, context)
 

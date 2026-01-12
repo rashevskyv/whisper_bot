@@ -13,15 +13,12 @@ def get_log_user(user, chat_id):
     return f"[User: {user.id} ({user.first_name}) | Chat: {chat_id}]"
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not should_respond(update, context): 
-        return
-        
+    if not should_respond(update, context): return
     message = update.message
     caption = message.caption
     media_group_id = message.media_group_id
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    
     user_log = get_log_user(update.effective_user, chat_id)
     
     if media_group_id:
@@ -61,6 +58,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except: pass
             
             await status_msg.delete()
+            
+            if settings.get('show_model_name', False):
+                model_name = settings.get('model', 'unknown')
+                full_response = f"[{model_name}]\n{full_response}"
+
             await send_long_message(message, full_response, parse_mode=ParseMode.HTML)
             await context_manager.save_message(user_id, chat_id, 'user', f"[Photo]: {full_prompt}")
             await context_manager.save_message(user_id, chat_id, 'assistant', full_response)
@@ -110,12 +112,22 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if status: await status.edit_text("🎙 Розпізнаю...")
         settings = await get_user_model_settings(user.id)
         
-        logger.info(f"   -> Sending to Whisper...")
-        text = await provider.transcribe(audio_path, language=settings.get('language', 'uk'))
-        logger.info(f"   -> Raw Transcribed Length: {len(text)}")
+        # 1. ТРАНСКРИБАЦІЯ
+        logger.info(f"   -> Sending to Transcribe Model...")
+        raw_text = await provider.transcribe(audio_path, language=settings.get('language', 'uk'))
+        transcription_model = settings.get('transcription_model', 'whisper-1')
         
+        # DEBUG: Якщо увімкнено, виводимо "сирий" текст
+        show_debug = settings.get('show_model_name', False)
+        if show_debug:
+            debug_raw_msg = f"[{transcription_model}] <b>Raw:</b>\n{raw_text}"
+            await send_long_message(update.message, debug_raw_msg, parse_mode=ParseMode.HTML, reply_to_msg_id=update.message.message_id)
+
+        # 2. ОФОРМЛЕННЯ (BEAUTIFY)
         if status: await status.edit_text("✨ Оформлюю...")
-        clean_text = await beautify_text(user.id, text)
+        
+        # beautify_text тепер повертає кортеж (текст, модель)
+        clean_text, beautify_model = await beautify_text(user.id, raw_text)
         
         if status: await status.delete()
 
@@ -128,11 +140,16 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     [InlineKeyboardButton("🗑 Видалити", callback_data="delete_msg")]
                 ])
             
+            # Додаємо префікс моделі до фінального тексту, якщо дебаг
+            final_output = clean_text
+            if show_debug:
+                final_output = f"[{beautify_model}]\n{clean_text}"
+
             await context_manager.save_message(user.id, chat_id, 'transcription', clean_text)
             
             await send_long_message(
                 update.message, 
-                f"<code>{clean_text}</code>", 
+                f"<code>{final_output}</code>", 
                 reply_markup=kb, 
                 parse_mode=ParseMode.HTML,
                 reply_to_msg_id=update.message.message_id

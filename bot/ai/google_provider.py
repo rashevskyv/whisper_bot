@@ -56,7 +56,7 @@ class GoogleProvider(LLMProvider):
 
     async def generate_stream(self, messages: List[Dict[str, str]], settings: Dict[str, Any]) -> AsyncGenerator[str, None]:
         model_name = settings.get('model', self.model_name)
-        disable_tools = settings.get('disable_tools', False)
+        disable_tools = settings.get('disable_tools', False) # ПРАПОРЕЦЬ
         
         user_tz_name = settings.get('timezone', BOT_TIMEZONE)
         try: tz = zoneinfo.ZoneInfo(user_tz_name)
@@ -69,7 +69,7 @@ class GoogleProvider(LLMProvider):
 
         system_instruction_text, history = self._map_messages(messages)
         
-        tech_instruction = f"\n\n[CLOCK] {current_time_str}. Timezone: {user_tz_name}."
+        tech_instruction = f"\n\n[REAL-TIME CLOCK] {current_time_str}. Timezone: {user_tz_name}."
         if not disable_tools:
             tech_instruction += f"\nReminders: {active_reminders_text}. Use tools for reminders."
         
@@ -80,7 +80,7 @@ class GoogleProvider(LLMProvider):
             last_msg = history.pop()
             prompt_content = last_msg['parts'][0]
 
-        # ВАЖЛИВО: Якщо tools вимкнено, передаємо None
+        # ВАЖЛИВО: tools = None, якщо disable_tools=True
         tools_obj = self._get_tools_proto(settings.get('allow_search', True)) if not disable_tools else None
         
         model = genai.GenerativeModel(model_name=model_name, system_instruction=full_sys_inst, tools=[tools_obj] if tools_obj else None)
@@ -110,6 +110,11 @@ class GoogleProvider(LLMProvider):
                             break 
                     if chunk.text: yield chunk.text
 
+                # Логування токенів після завершення потоку
+                if response_stream and response_stream.usage_metadata:
+                    usage = response_stream.usage_metadata
+                    logger.info(f"📊 [Gemini] Usage: Prompt={usage.prompt_token_count}, Candidates={usage.candidates_token_count}, Total={usage.total_token_count}")
+                
                 if function_call_found:
                     try: await response_stream.resolve()
                     except: pass
@@ -125,11 +130,26 @@ class GoogleProvider(LLMProvider):
                         keep_generating = True
                         
                     elif fn_name == "schedule_reminder":
-                        # ... (код нагадування) ...
-                        # Цей блок не виконається, якщо tools=None
-                        api_response = {"status": "success"}
+                        try:
+                            iso = fn_args.get("iso_time_utc")
+                            text = fn_args.get("text")
+                            dt_utc = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+                            await scheduler_service.add_reminder(settings.get('user_id'), chat_id, text, dt_utc)
+                            l_dt = dt_utc.astimezone(tz)
+                            days = {"Monday":"Пн","Tuesday":"Вт","Wednesday":"Ср","Thursday":"Чт","Friday":"Пт","Saturday":"Сб","Sunday":"Нд"}
+                            d_name = days.get(l_dt.strftime("%A"), l_dt.strftime("%a"))
+                            yield f"\n✅ <b>Встановлено:</b> {d_name}, {l_dt.strftime('%d.%m %H:%M')}\n📝 <i>{text}</i>"
+                            api_response = {"status": "success"}
+                        except Exception as e: api_response = {"status": "error", "message": str(e)}
 
-                    # ... (інші інструменти) ...
+                    elif fn_name == "delete_reminder":
+                        success = await scheduler_service.delete_reminder_by_id(int(fn_args.get("reminder_id")))
+                        api_response = {"status": "deleted" if success else "error"}
+                        if success: yield f"\n🗑 <b>Видалено ID: {fn_args.get('reminder_id')}</b>"
+                        
+                    elif fn_name == "web_search":
+                        res = await perform_search(fn_args.get("query", ""))
+                        api_response = {"result": res}
 
                     current_prompt = genai.protos.Content(parts=[genai.protos.Part(function_response=genai.protos.FunctionResponse(name=fn_name, response=api_response))])
 

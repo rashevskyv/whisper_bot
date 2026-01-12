@@ -70,7 +70,6 @@ async def send_long_message(target, text: str, reply_markup=None, parse_mode=Par
     text = clean_html(text)
     if hasattr(target, 'reply_text'): send_func = target.reply_text; reply_id = target.message_id
     else: send_func = target.send_message; reply_id = None
-    
     if reply_to_msg_id: reply_id = reply_to_msg_id
 
     LIMIT = 4000
@@ -87,7 +86,6 @@ async def send_long_message(target, text: str, reply_markup=None, parse_mode=Par
         kb = reply_markup if i == len(parts) - 1 else None
         kwargs = {'text': part, 'reply_markup': kb, 'parse_mode': parse_mode}
         if reply_id and i == 0: kwargs['reply_to_message_id'] = reply_id
-        
         try: 
             if hasattr(target, 'reply_text'): await send_func(**kwargs, quote=True)
             else: await send_func(**kwargs)
@@ -96,21 +94,39 @@ async def send_long_message(target, text: str, reply_markup=None, parse_mode=Par
             if hasattr(target, 'reply_text'): await send_func(**kwargs)
             else: await send_func(**kwargs)
 
-async def beautify_text(user_id: int, text: str) -> str:
-    """Тільки пунктуація. Інструменти ВИМКНЕНО."""
-    if not text or len(text.strip()) < 2: return text
+async def beautify_text(user_id: int, text: str) -> tuple[str, str]:
+    """
+    Повертає кортеж (відформатований_текст, назва_моделі).
+    """
+    if not text or len(text.strip()) < 2: return text, "None"
     
-    provider = await get_ai_provider(user_id)
-    if not provider: return text
+    provider = await get_ai_provider(user_id, for_transcription=False)
+    if not provider: return text, "Error: No Provider"
     
+    beautify_model = "gpt-4o-mini"
+    async with AsyncSessionLocal() as session:
+        user = await session.get(User, user_id)
+        if user:
+            user_model = user.settings.get('model', 'gpt-4o-mini')
+            if isinstance(provider, GoogleProvider):
+                beautify_model = user_model
+            else:
+                beautify_model = "gpt-4o-mini"
+
     messages = [
         {"role": "system", "content": DEFAULT_SETTINGS['beautify_prompt']},
         {"role": "user", "content": text}
     ]
     result = ""
     try:
-        # ВАЖЛИВО: disable_tools=True
-        async for chunk in provider.generate_stream(messages, {'model': 'gpt-4o-mini', 'temperature': 0.0, 'allow_search': False, 'disable_tools': True}):
+        async for chunk in provider.generate_stream(messages, {
+            'model': beautify_model, 
+            'temperature': 0.0, 
+            'allow_search': False, 
+            'disable_tools': True
+        }):
             result += chunk
-        return result.strip() if result else text
-    except: return text
+        return (result.strip() if result else text), beautify_model
+    except Exception as e:
+        logger.error(f"Beautify Error with {beautify_model}: {e}")
+        return text, f"Error ({beautify_model})"
