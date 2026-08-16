@@ -9,7 +9,8 @@ from bot.database.session import AsyncSessionLocal
 from bot.database.models import User, APIKey
 from bot.utils.helpers import get_or_create_user
 from bot.utils.security import key_manager
-from config import PERSONAS, DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS, ADMIN_IDS, AVAILABLE_MODELS, TRANSCRIPTION_MODELS
+from bot.utils.context import context_manager
+from config import PERSONAS, DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS, ADMIN_IDS, AVAILABLE_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +59,13 @@ def get_main_menu_keyboard():
     keyboard = [
         [
             InlineKeyboardButton("🧠 Чат Модель", callback_data="model_menu"),
-            InlineKeyboardButton("🎙 Транскрибація", callback_data="transcription_menu")
-        ],
-        [
-            InlineKeyboardButton("🌐 Мова", callback_data="lang_menu"),
             InlineKeyboardButton("🎭 Персона", callback_data="persona_menu")
         ],
         [
-            InlineKeyboardButton("🌍 Часовий пояс", callback_data="timezone_menu"),
+            InlineKeyboardButton("🌐 Мова", callback_data="lang_menu"),
+            InlineKeyboardButton("🌍 Часовий пояс", callback_data="timezone_menu")
+        ],
+        [
             InlineKeyboardButton("🔑 Ключі API", callback_data="keys_menu")
         ],
         [
@@ -83,6 +83,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_id = update.effective_chat.id
     user_id = update.effective_user.id
     is_bot_admin = user_id in ADMIN_IDS
+    is_group = target_id < 0
 
     async with AsyncSessionLocal() as session:
         db_obj = await session.get(User, target_id)
@@ -90,24 +91,26 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await get_or_create_user(update.effective_chat)
             db_obj = await session.get(User, target_id)
 
-        settings = db_obj.settings if db_obj else DEFAULT_GROUP_SETTINGS
+        settings = db_obj.settings if db_obj else (DEFAULT_GROUP_SETTINGS if is_group else DEFAULT_SETTINGS)
         show_debug = settings.get('show_model_name', False)
+        context_mode = settings.get('context_mode', 'shared' if is_group else 'personal')
 
     debug_icon = "✅" if show_debug else "❌"
 
     keyboard = [
         [
             InlineKeyboardButton("🧠 Чат Модель", callback_data="model_menu"),
-            InlineKeyboardButton("🎙 Транскрибація", callback_data="transcription_menu")
-        ],
-        [
-            InlineKeyboardButton("🌐 Мова", callback_data="lang_menu"),
             InlineKeyboardButton("🎭 Персона", callback_data="persona_menu")
         ],
         [
+            InlineKeyboardButton("🌐 Мова", callback_data="lang_menu"),
             InlineKeyboardButton("🌍 Часовий пояс", callback_data="timezone_menu")
         ]
     ]
+
+    if is_group:
+        mode_btn_text = "👥 Контекст: Спільний" if context_mode == 'shared' else "👤 Контекст: Особистий"
+        keyboard.append([InlineKeyboardButton(mode_btn_text, callback_data="toggle_context_mode")])
 
     if update.effective_chat.type == 'private':
         keyboard.append([InlineKeyboardButton("🔑 Ключі API", callback_data="keys_menu")])
@@ -127,6 +130,25 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
     except BadRequest: pass
+
+async def toggle_context_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not await check_group_admin(update, context): return
+
+    target_id = update.effective_chat.id
+    new_mode = 'shared'
+    async with AsyncSessionLocal() as session:
+        user = await session.get(User, target_id)
+        if user:
+            settings = dict(user.settings)
+            current_mode = settings.get('context_mode', 'shared')
+            new_mode = 'personal' if current_mode == 'shared' else 'shared'
+            settings['context_mode'] = new_mode
+            user.settings = settings
+            await session.commit()
+
+    await query.answer(f"Режим контексту: {'Спільний' if new_mode == 'shared' else 'Особистий'}")
+    await settings_menu(update, context)
 
 async def toggle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -161,46 +183,11 @@ async def reset_context_handler(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     if not await check_group_admin(update, context): return
 
-    await query.answer("Контекст діалогу очищено!", show_alert=True)
+    deleted_count = await context_manager.clear_context(update.effective_chat.id)
+    await query.answer(f"Контекст діалогу очищено! Видалено повідомлень: {deleted_count}", show_alert=True)
     await settings_menu(update, context)
 
 # --- MENU HANDLERS ---
-
-async def transcription_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ПЕРЕВІРКА ПРАВ
-    if not await check_group_admin(update, context): return
-
-    query = update.callback_query
-    chat_id = update.effective_chat.id
-
-    async with AsyncSessionLocal() as session:
-        obj = await session.get(User, chat_id)
-        current_model = obj.settings.get('transcription_model', 'whisper-1') if obj else 'whisper-1'
-
-    text = f"🎙 <b>Модель транскрибації:</b> <code>{current_model}</code>"
-    keyboard = []
-
-    if bool(os.getenv("OPENAI_API_KEY")):
-        for m in TRANSCRIPTION_MODELS['openai']:
-            label = f"✅ {m}" if current_model == m else m
-            keyboard.append([InlineKeyboardButton(label, callback_data=f"set_trans_{m}")])
-
-    if bool(os.getenv("GOOGLE_API_KEY")):
-        for m in TRANSCRIPTION_MODELS['google']:
-            label = f"✅ {m}" if current_model == m else m
-            keyboard.append([InlineKeyboardButton(label, callback_data=f"set_trans_{m}")])
-
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
-    try: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-    except BadRequest: pass
-
-async def set_transcription_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_group_admin(update, context): return
-    query = update.callback_query
-    new_model = query.data.replace("set_trans_", "")
-    await update_setting(update.effective_chat.id, 'transcription_model', new_model)
-    await query.answer(f"Встановлено: {new_model}")
-    await transcription_menu(update, context)
 
 async def language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return

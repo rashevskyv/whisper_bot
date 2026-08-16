@@ -24,7 +24,9 @@ class LLMProvider(ABC):
     async def transcribe(
         self, 
         audio_path: str, 
-        language: str = None
+        language: str = None,
+        prompt: str = None,
+        keywords: List[str] = None
     ) -> str:
         """
         Транскрибує аудіо/відео файл в текст.

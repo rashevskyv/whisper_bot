@@ -5,7 +5,8 @@ from telegram.constants import ParseMode, ChatAction
 from telegram.ext import ContextTypes
 from bot.utils.helpers import get_ai_provider, send_long_message, beautify_text
 from bot.utils.context import context_manager
-from bot.utils.media import download_file, extract_audio, cleanup_files
+from bot.utils.media import download_file, extract_audio, cleanup_files, validate_audio_size
+from bot.utils.limits import check_transcription_limit, record_transcription_usage
 from bot.handlers.common import should_respond, get_user_model_settings, MEDIA_GROUP_CACHE
 
 logger = logging.getLogger(__name__)
@@ -189,6 +190,14 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif update.message.video: file_obj = update.message.video; is_video = True; media_type = "Video File"
     else: return
 
+    # Перевірка щоденного ліміту транскрибації перед завантаженням/викликом API
+    duration = getattr(file_obj, 'duration', 0) or 0
+    can_transcribe, limit_msg = await check_transcription_limit(user.id, duration)
+    if not can_transcribe:
+        if update.effective_chat.type == 'private' or should_respond(update, context):
+            await update.message.reply_text(limit_msg)
+        return
+
     logger.info(f"🎙 {user_log} Received {media_type}. Processing...")
 
     provider = await get_ai_provider(user.id, for_transcription=True)
@@ -203,16 +212,32 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
         input_path = await download_file(tg_file, file_obj.file_id)
         temp_files.append(input_path)
 
-        audio_path = await extract_audio(input_path) if is_video else input_path
-        if is_video: temp_files.append(audio_path)
+        if is_video:
+            audio_path = await extract_audio(input_path)
+            temp_files.append(audio_path)
+        else:
+            audio_path = input_path
+            validate_audio_size(audio_path)
 
         if status: await status.edit_text("🎙 Розпізнаю...")
-        settings = await get_user_model_settings(user.id)
+        settings = await get_user_model_settings(chat_id)
 
         # 1. Транскрибація
-        logger.info(f"   -> Sending to Transcribe Model...")
-        raw_text = await provider.transcribe(audio_path, language=settings.get('language', 'uk'))
-        transcription_model = settings.get('transcription_model', 'whisper-1')
+        logger.info(f"   -> Sending to Transcribe Model (gpt-transcribe)...")
+        raw_text = await provider.transcribe(
+            audio_path,
+            language=settings.get('language', 'uk'),
+            prompt=settings.get('transcription_prompt'),
+            keywords=settings.get('transcription_keywords')
+        )
+        transcription_model = "gpt-transcribe"
+
+        if not raw_text or not raw_text.strip():
+            if status: await status.edit_text("⚠️ Не вдалося розпізнати мову або аудіо порожнє.")
+            return
+
+        # Фіксуємо використання ліміту тільки після успішного розпізнавання
+        await record_transcription_usage(user.id, duration)
 
         # Debug вивід raw тексту
         if settings.get('show_model_name', False):

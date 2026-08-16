@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import AsyncGenerator, List, Dict, Any
 from openai import AsyncOpenAI, APIError
 from bot.ai.base import LLMProvider
-from bot.utils.search import perform_search
+from bot.utils.search import perform_search, extract_source_links, format_sources_html
 from bot.utils.scheduler import scheduler_service
 from bot.utils.date_helper import calculate_future_date
 from config import BOT_TIMEZONE
@@ -126,6 +126,7 @@ class OpenAIProvider(LLMProvider):
         # ВАЖЛИВО: tools = None, якщо disable_tools=True
         tools = self._get_tools_schema(settings.get('allow_search', True)) if not disable_tools else None
 
+        collected_source_urls: List[str] = []
         try:
             stream = await self.client.chat.completions.create(
                 model=model, messages=local_messages, temperature=settings.get('temperature', 0.7), tools=tools, stream=True
@@ -186,21 +187,57 @@ class OpenAIProvider(LLMProvider):
                     elif name == "web_search":
                         yield "\n🔎 <i>Шукаю...</i>\n"
                         content = await perform_search(args.get("query"))
+                        for link in extract_source_links(str(content)):
+                            if link not in collected_source_urls and len(collected_source_urls) < 5:
+                                collected_source_urls.append(link)
 
                     local_messages.append({"role": "tool", "tool_call_id": tc["id"], "content": str(content)})
 
                 if should_stop_stream: break
                 stream = await self.client.chat.completions.create(model=model, messages=local_messages, tools=tools, stream=True)
+
+            if collected_source_urls:
+                yield format_sources_html(collected_source_urls)
+
         except Exception as e:
             logger.error(f"AI Stream Error: {e}")
             yield f"⚠️ Помилка AI: {e}"
 
-    async def transcribe(self, audio_path: str, language: str = None) -> str:
+    async def transcribe(
+        self,
+        audio_path: str,
+        language: str = None,
+        prompt: str = None,
+        keywords: List[str] = None
+    ) -> str:
+        kwargs: Dict[str, Any] = {
+            "model": "gpt-transcribe",
+        }
+        if prompt and prompt.strip():
+            kwargs["prompt"] = prompt.strip()
+
+        extra_body: Dict[str, Any] = {}
+        if language:
+            lang_code = language.strip()[:2].lower()
+            if lang_code:
+                extra_body["languages"] = [lang_code]
+
+        if keywords:
+            clean_keywords = [k.strip() for k in keywords if isinstance(k, str) and k.strip()]
+            if clean_keywords:
+                extra_body["keywords"] = clean_keywords
+
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+
         try:
             with open(audio_path, "rb") as f:
-                res = await self.client.audio.transcriptions.create(model="whisper-1", file=f, language=language[:2] if language else None)
+                kwargs["file"] = f
+                res = await self.client.audio.transcriptions.create(**kwargs)
             return res.text
-        except Exception as e: return f"Error: {e}"
+        except Exception as e:
+            logger.error(f"OpenAI transcription error: {e}")
+            raise
 
     async def analyze_image(self, image_path: str, prompt: str, messages: List[Dict[str, str]] = None, settings: Dict[str, Any] = None) -> AsyncGenerator[str, None]:
         try:

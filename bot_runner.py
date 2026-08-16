@@ -7,7 +7,7 @@ from telegram.request import HTTPXRequest
 from telegram.warnings import PTBUserWarning
 
 from bot.database.session import init_db
-from bot.handlers.commands import start
+from bot.handlers.commands import start, remember_cmd, memories_cmd, forget_cmd, terms_cmd
 from bot.utils.scheduler import scheduler_service
 
 # Handlers
@@ -22,10 +22,9 @@ from bot.handlers.settings import (
     model_menu, set_model, ask_custom_model, save_custom_model,
     persona_menu, set_persona, ask_custom_prompt, save_custom_prompt,
     language_menu, set_language_gui,
-    transcription_menu, set_transcription_model,
     timezone_menu, set_timezone_btn, ask_custom_timezone, save_custom_timezone,
-    toggle_debug, ask_photo_prompt, process_photo_prompt, # <--- ДОДАНО: фото хендлери
-    WAITING_FOR_KEY, WAITING_FOR_CUSTOM_MODEL, WAITING_FOR_CUSTOM_PROMPT, WAITING_FOR_TIMEZONE, WAITING_FOR_PHOTO_PROMPT # <--- ДОДАНО: WAITING_FOR_PHOTO_PROMPT
+    toggle_debug, toggle_context_mode, ask_photo_prompt, process_photo_prompt,
+    WAITING_FOR_KEY, WAITING_FOR_CUSTOM_MODEL, WAITING_FOR_CUSTOM_PROMPT, WAITING_FOR_TIMEZONE, WAITING_FOR_PHOTO_PROMPT
 )
 from config import TOKEN
 
@@ -109,6 +108,10 @@ def main():
     app.add_handler(photo_prompt_conv)
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("remember", remember_cmd))
+    app.add_handler(CommandHandler("memories", memories_cmd))
+    app.add_handler(CommandHandler("forget", forget_cmd))
+    app.add_handler(CommandHandler("terms", terms_cmd))
 
     # Callbacks
     app.add_handler(CallbackQueryHandler(settings_menu, pattern="^settings_menu$"))
@@ -125,9 +128,8 @@ def main():
     app.add_handler(CallbackQueryHandler(set_language_gui, pattern="^set_lang_"))
     app.add_handler(CallbackQueryHandler(timezone_menu, pattern="^timezone_menu$"))
     app.add_handler(CallbackQueryHandler(set_timezone_btn, pattern="^set_tz_"))
-    app.add_handler(CallbackQueryHandler(transcription_menu, pattern="^transcription_menu$"))
-    app.add_handler(CallbackQueryHandler(set_transcription_model, pattern="^set_trans_"))
     app.add_handler(CallbackQueryHandler(toggle_debug, pattern="^toggle_debug$"))
+    app.add_handler(CallbackQueryHandler(toggle_context_mode, pattern="^toggle_context_mode$"))
 
     # --- Handlers ---
     app.add_handler(MessageHandler(

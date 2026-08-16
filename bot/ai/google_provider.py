@@ -6,7 +6,7 @@ import google.generativeai as genai
 from google.ai.generativelanguage import FunctionDeclaration, Tool, Schema, Type
 from bot.ai.base import LLMProvider
 from config import DEFAULT_SETTINGS, BOT_TIMEZONE
-from bot.utils.search import perform_search
+from bot.utils.search import perform_search, extract_source_links, format_sources_html
 from bot.utils.scheduler import scheduler_service
 from bot.utils.date_helper import calculate_future_date
 
@@ -88,6 +88,7 @@ class GoogleProvider(LLMProvider):
 
         keep_generating = True
         current_prompt = prompt_content
+        collected_source_urls: List[str] = []
 
         while keep_generating:
             keep_generating = False
@@ -150,6 +151,10 @@ class GoogleProvider(LLMProvider):
                     elif fn_name == "web_search":
                         res = await perform_search(fn_args.get("query", ""))
                         api_response = {"result": res}
+                        keep_generating = True
+                        for link in extract_source_links(str(res)):
+                            if link not in collected_source_urls and len(collected_source_urls) < 5:
+                                collected_source_urls.append(link)
 
                     current_prompt = genai.protos.Content(parts=[genai.protos.Part(function_response=genai.protos.FunctionResponse(name=fn_name, response=api_response))])
 
@@ -158,12 +163,16 @@ class GoogleProvider(LLMProvider):
                 yield f"⚠️ Error: {str(e)}"
                 keep_generating = False
 
-    async def transcribe(self, audio_path: str, language: str = None) -> str:
+        if collected_source_urls:
+            yield format_sources_html(collected_source_urls)
+
+    async def transcribe(self, audio_path: str, language: str = None, prompt: str = None, keywords: List[str] = None) -> str:
         try:
             with open(audio_path, "rb") as f:
                 data = f.read()
             model = genai.GenerativeModel(self.model_name)
-            response = await model.generate_content_async([{'mime_type': 'audio/mp3', 'data': data}, "Transcribe this audio."])
+            p = prompt or "Transcribe this audio."
+            response = await model.generate_content_async([{'mime_type': 'audio/mp3', 'data': data}, p])
             return response.text.strip()
         except Exception as e: return f"Error: {e}"
 

@@ -22,6 +22,8 @@ TEMP_DIR = os.path.join(BASE_DIR, "temp")
 
 os.makedirs(TEMP_DIR, exist_ok=True)
 
+DAILY_TRANSCRIPTION_LIMIT_SECONDS = 3600  # 60 хвилин на добу (UTC)
+
 BOT_TRIGGERS = ["бот", "bot", "gpt", "валєра", "валєрчик", "валєрон", "ボット", "机器人", "assистент"]
 
 # ЧАТ МОДЕЛІ
@@ -33,20 +35,6 @@ AVAILABLE_MODELS = {
     "google": [
         "gemini-3-pro-preview",
         "gemini-2.5-pro",
-        "gemini-3-flash-preview",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-8b"
-    ]
-}
-
-# МОДЕЛІ ТРАНСКРИБАЦІЇ
-TRANSCRIPTION_MODELS = {
-    "openai": [
-        "whisper-1",
-        "gpt-4o-transcribe",
-        "gpt-4o-mini-transcribe"
-    ],
-    "google": [
         "gemini-3-flash-preview",
         "gemini-2.5-flash",
         "gemini-2.5-flash-8b"
@@ -131,12 +119,13 @@ DEFAULT_SETTINGS = {
     'rewrite': True,
     'temperature': 0.7,
     'model': 'gpt-4o-mini',
-    'transcription_model': 'whisper-1',
     'language': 'uk',
     'system_prompt': PERSONAS['assistant']['prompt'],
     'allow_search': True,
     'show_model_name': False,
     'disable_tools': False,
+    'context_mode': 'personal',
+    'transcription_keywords': [],
 
     'summary_prompt': (
         "Ти — аналітик. Перетвори текст на стислий звіт.\n"
@@ -172,13 +161,14 @@ DEFAULT_SETTINGS = {
 # Налаштування за замовчуванням для ГРУП
 DEFAULT_GROUP_SETTINGS = {
     'model': 'gpt-4o-mini',
-    'transcription_model': 'whisper-1',
     'temperature': 0.7,
     'language': 'uk',
     'system_prompt': PERSONAS['assistant']['prompt'],
     'allow_search': True,
     'show_model_name': False,
     'disable_tools': False,
+    'context_mode': 'shared',
+    'transcription_keywords': [],
 
     'trigger_mode': 'keywords',
     'auto_transcribe': True,

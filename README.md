@@ -13,13 +13,20 @@ The bot features **real-time web search**, smart summarization, context memory, 
 
 ### 🌐 Live Web Search
 - **Internet Access:** The bot can browse the web via DuckDuckGo to find real-time information (news, weather, stock prices).
-- **Smart Execution:** Powered by OpenAI Function Calling — the bot decides when to search based on your query.
-- **Citations:** Provides answers with links to sources.
+- **Smart Execution:** Powered by OpenAI Function Calling & Gemini Tools — the bot decides when to search based on your query.
+- **Guaranteed Source Links:** Automatically preserves and appends up to 5 safe, unique clickable source links directly to search answers.
 
 ### 🗣 Audio & Video Intelligence
-- **Universal Transcription:** Automatically converts voice messages, video notes (circles), and video files to text using **Whisper**.
+- **Universal Transcription:** Automatically converts voice messages, video notes (circles), and video files to text using OpenAI **GPT Transcribe** (`gpt-transcribe`).
+- **Daily Usage Allowance:** Enforces a per-user daily quota of 60 minutes (3600 seconds) of successfully transcribed media (resetting daily at 00:00 UTC).
+- **Chat Glossary:** Manage transcription keywords and domain terms via `/terms` (e.g. `/terms term1, term2` or `/terms clear`).
 - **Smart Summarization:** Includes a "Summarize" button that transforms long, chaotic audio into structured bullet points using a specialized analyst persona.
 - **Language Aware:** Transcription automatically adapts to the user's selected language settings.
+
+### 🧠 Explicit Memory & Context Management
+- **Explicit Memory:** Save facts using `/remember <fact>`, list your facts via `/memories`, and delete facts using `/forget <id>`. Saved memories are securely injected into model context for their owner.
+- **Group Privacy Control:** Configure group context mode (`shared` vs `personal`) in settings to isolate user conversation histories.
+- **Context Retention & Clearing:** 30-day automatic message retention pruning and real-time context clearing via the settings menu.
 
 ### 👁 Computer Vision
 - **Image Analysis:** Send any photo to the bot.

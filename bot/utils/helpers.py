@@ -51,18 +51,28 @@ async def get_ai_provider(user_id: int, for_transcription: bool = False):
     async with AsyncSessionLocal() as session:
         user = await session.get(User, user_id)
         if for_transcription:
-            model = user.settings.get('transcription_model', DEFAULT_SETTINGS['transcription_model']) if user and user.settings else 'whisper-1'
+            provider_type = 'openai'
+            result = await session.execute(
+                select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider_type, APIKey.is_active == True)
+            )
+            user_key_obj = result.scalar_one_or_none()
+            api_key = key_manager.decrypt(user_key_obj.encrypted_key) if user_key_obj else SYSTEM_OPENAI_KEY
+            if not api_key:
+                return None
+            return OpenAIProvider(api_key=api_key)
         else:
             model = user.settings.get('model', 'gpt-4o-mini') if user and user.settings else 'gpt-4o-mini'
+            provider_type = 'google' if 'gemini' in model.lower() else 'openai'
+            result = await session.execute(
+                select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider_type, APIKey.is_active == True)
+            )
+            user_key_obj = result.scalar_one_or_none()
 
-        provider_type = 'google' if 'gemini' in model.lower() else 'openai'
-        result = await session.execute(select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider_type, APIKey.is_active == True))
-        user_key_obj = result.scalar_one_or_none()
+            api_key = key_manager.decrypt(user_key_obj.encrypted_key) if user_key_obj else (SYSTEM_GOOGLE_KEY if provider_type == 'google' else SYSTEM_OPENAI_KEY)
+            if not api_key:
+                return None
 
-        api_key = key_manager.decrypt(user_key_obj.encrypted_key) if user_key_obj else (SYSTEM_GOOGLE_KEY if provider_type == 'google' else SYSTEM_OPENAI_KEY)
-        if not api_key: return None
-
-        return GoogleProvider(api_key=api_key, model_name=model) if provider_type == 'google' else OpenAIProvider(api_key=api_key)
+            return GoogleProvider(api_key=api_key, model_name=model) if provider_type == 'google' else OpenAIProvider(api_key=api_key)
 
 def clean_html(text: str) -> str:
     if not text: return ""
