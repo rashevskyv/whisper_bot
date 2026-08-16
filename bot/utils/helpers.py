@@ -17,20 +17,20 @@ SYSTEM_GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 
 async def get_or_create_user(telegram_entity) -> User:
     """
-    Створює або повертає запис в БД. 
+    Створює або повертає запис в БД.
     telegram_entity може бути User (приват) або Chat (група).
     """
     entity_id = telegram_entity.id
     is_group = entity_id < 0
-    
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User).where(User.id == entity_id))
         user = result.scalar_one_or_none()
-        
+
         if not user:
             # Вибираємо правильні дефолтні налаштування
             initial_settings = DEFAULT_GROUP_SETTINGS.copy() if is_group else DEFAULT_SETTINGS.copy()
-            
+
             # Для груп name - це title, для юзерів - full_name/username
             name = getattr(telegram_entity, 'title', None) or getattr(telegram_entity, 'full_name', 'Unknown')
             username = getattr(telegram_entity, 'username', None)
@@ -54,11 +54,11 @@ async def get_ai_provider(user_id: int, for_transcription: bool = False):
             model = user.settings.get('transcription_model', DEFAULT_SETTINGS['transcription_model']) if user and user.settings else 'whisper-1'
         else:
             model = user.settings.get('model', 'gpt-4o-mini') if user and user.settings else 'gpt-4o-mini'
-        
+
         provider_type = 'google' if 'gemini' in model.lower() else 'openai'
         result = await session.execute(select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider_type, APIKey.is_active == True))
         user_key_obj = result.scalar_one_or_none()
-        
+
         api_key = key_manager.decrypt(user_key_obj.encrypted_key) if user_key_obj else (SYSTEM_GOOGLE_KEY if provider_type == 'google' else SYSTEM_OPENAI_KEY)
         if not api_key: return None
 
@@ -101,10 +101,10 @@ async def send_long_message(target, text: str, reply_markup=None, parse_mode=Par
         kb = reply_markup if i == len(parts) - 1 else None
         kwargs = {'text': part, 'reply_markup': kb, 'parse_mode': parse_mode}
         if reply_id and i == 0: kwargs['reply_to_message_id'] = reply_id
-        try: 
+        try:
             if hasattr(target, 'reply_text'): await send_func(**kwargs, quote=True)
             else: await send_func(**kwargs)
-        except: 
+        except:
             kwargs['parse_mode'] = None
             if hasattr(target, 'reply_text'): await send_func(**kwargs)
             else: await send_func(**kwargs)
@@ -112,10 +112,10 @@ async def send_long_message(target, text: str, reply_markup=None, parse_mode=Par
 async def beautify_text(user_id: int, text: str) -> tuple[str, str]:
     """Повертає (текст, назва_моделі)."""
     if not text or len(text.strip()) < 2: return text, "None"
-    
+
     provider = await get_ai_provider(user_id, for_transcription=False)
     if not provider: return text, "Error: No Provider"
-    
+
     beautify_model = "gpt-4o-mini"
     async with AsyncSessionLocal() as session:
         user = await session.get(User, user_id)
@@ -133,9 +133,9 @@ async def beautify_text(user_id: int, text: str) -> tuple[str, str]:
     result = ""
     try:
         async for chunk in provider.generate_stream(messages, {
-            'model': beautify_model, 
-            'temperature': 0.0, 
-            'allow_search': False, 
+            'model': beautify_model,
+            'temperature': 0.0,
+            'allow_search': False,
             'disable_tools': True
         }):
             result += chunk

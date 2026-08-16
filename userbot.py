@@ -37,12 +37,12 @@ def get_target_bot(link: str) -> str:
     link = link.lower()
     if any(d in link for d in ["twitter.com", "x.com", "9gag.com", "bsky.app"]):
         return BOT_MONKETT
-    return BOT_SAVEAS 
+    return BOT_SAVEAS
 
 async def process_queue():
     logger.info(f"🚀 [Userbot] Queue Processor STARTED.")
     logger.info(f"📬 [Userbot] Forwarding to: @{MAIN_BOT_USERNAME}")
-    
+
     if not MAIN_BOT_USERNAME:
         logger.error("❌ [Userbot] MAIN_BOT_USERNAME not set in .env!")
         return
@@ -58,14 +58,14 @@ async def process_queue():
                         select(DownloadQueue).where(DownloadQueue.status == "pending").limit(1)
                     )
                     task = result.scalar_one_or_none()
-                    
+
                     if task:
                         task.status = "processing"
                         await session.commit()
-                        await session.refresh(task) 
+                        await session.refresh(task)
                     else:
                         await session.commit()
-                        
+
                 except Exception as db_e:
                     logger.error(f"❌ [Userbot] DB Read Error: {db_e}")
                     await asyncio.sleep(1)
@@ -78,45 +78,45 @@ async def process_queue():
             if task:
                 target_bot = get_target_bot(task.link)
                 logger.info(f"📥 [Userbot] TAKING TASK #{task.id} -> {task.link}")
-                
+
                 final_status = "timeout"
                 error_message = None
-                
+
                 try:
                     # 1. Unblock & Send
                     try: await app.unblock_user(target_bot)
                     except: pass
-                    
+
                     sent_msg = await app.send_message(target_bot, task.link)
-                    
+
                     response_found = False
                     found_messages = []
-                    
+
                     # 2. Wait Loop
                     for i in range(15): # 30 sec max
                         await asyncio.sleep(2)
-                        
+
                         history = []
                         async for msg in app.get_chat_history(target_bot, limit=8):
                             history.append(msg)
-                        
+
                         new_messages = [m for m in history if m.id > sent_msg.id]
-                        
+
                         # A. Check Media (Success)
                         media_msgs = [
-                            m for m in new_messages 
+                            m for m in new_messages
                             if m.video or m.document or m.photo or m.animation or m.audio or m.voice or m.video_note
                         ]
-                        
+
                         if media_msgs:
                             logger.info(f"   -> Media detected! Gathering batch...")
                             await asyncio.sleep(2)
-                            
+
                             final_history = []
                             async for msg in app.get_chat_history(target_bot, limit=10):
                                 if msg.id > sent_msg.id and (msg.video or msg.document or msg.photo or msg.animation or msg.audio or msg.voice or msg.video_note):
                                         final_history.append(msg)
-                            
+
                             found_messages = final_history
                             final_status = "done"
                             break
@@ -129,15 +129,15 @@ async def process_queue():
                             final_status = "failed_by_donor" # Новий статус для обробки main.py
                             logger.warning(f"❌ [Userbot] Helper bot error response: {error_message[:50]}...")
                             break
-                    
+
                     # 3. Forwarding (only on media success)
                     if found_messages:
                         logger.info(f"✅ [Userbot] Success. Forwarding {len(found_messages)} files...")
-                        
+
                         for msg in sorted(found_messages, key=lambda x: x.id):
                             try:
                                 await msg.copy(
-                                    MAIN_BOT_USERNAME, 
+                                    MAIN_BOT_USERNAME,
                                     caption=f"task_id:{task.id}"
                                 )
                                 response_found = True

@@ -60,16 +60,16 @@ async def remove_keyboard_in_group(update: Update, context: ContextTypes.DEFAULT
 async def handle_internal_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     caption = message.caption or ""
-    
+
     if not caption.startswith("task_id:"): return
 
     try:
         task_id = int(caption.split(":")[1])
         logger.info(f"📥 [MainBot] Received Internal Task Result. ID: {task_id}")
-        
+
         async with AsyncSessionLocal() as session:
             task = await session.get(DownloadQueue, task_id)
-            
+
             if task and task.status in ["failed_by_donor", "timeout", "error"]:
                 link_to_download = task.link.split("###")[-1] if "USERBOT_ERROR:" in task.link else task.link
                 error_prefix = f"⚠️ <b>Userbot Failed</b>: "
@@ -83,7 +83,7 @@ async def handle_internal_task(update: Update, context: ContextTypes.DEFAULT_TYP
 
                 logger.warning(f"🔄 [MainBot] Userbot failed for {link_to_download}. Attempting yt-dlp fallback.")
                 status_msg = await context.bot.send_message(task.user_id, f"{error_prefix}⏳ Завантажую через yt-dlp...", reply_to_message_id=task.message_id, parse_mode="HTML")
-                
+
                 try:
                     media_info = await download_media_direct(link_to_download)
                     if media_info and os.path.exists(media_info['path']):
@@ -101,8 +101,8 @@ async def handle_internal_task(update: Update, context: ContextTypes.DEFAULT_TYP
                 except Exception as dl_err:
                     logger.error(f"❌ [MainBot] yt-dlp fatal error: {dl_err}")
                     await status_msg.edit_text(f"{error_prefix}❌ Невідома помилка yt-dlp.")
-                    
-                await message.delete() 
+
+                await message.delete()
                 return
 
             if task:
@@ -113,44 +113,44 @@ async def handle_internal_task(update: Update, context: ContextTypes.DEFAULT_TYP
                 logger.warning(f"⚠️ [MainBot] Task {task_id} not found.")
 
         await message.delete()
-        
+
     except Exception as e:
         logger.error(f"❌ [MainBot] Internal Handler Error: {e}")
 
 async def _process_text_as_vision_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_message, prompt_text: str):
-    from bot.handlers.media import process_vision_request_from_text_handler 
+    from bot.handlers.media import process_vision_request_from_text_handler
     await process_vision_request_from_text_handler(update, context, photo_message, prompt_text)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
-    
+
     message = update.message
     user = update.effective_user
     text = message.text.strip()
     chat_id = update.effective_chat.id
     is_private = update.effective_chat.type == 'private'
     user_log = get_log_user(user, chat_id)
-    
+
     # 0. Сценарій 1 (Реплай на фото)
-    if (message.reply_to_message and 
-        (message.reply_to_message.photo or 
+    if (message.reply_to_message and
+        (message.reply_to_message.photo or
          (message.reply_to_message.document and message.reply_to_message.document.mime_type and message.reply_to_message.document.mime_type.startswith('image')))):
-        
+
         if not is_private and not should_respond(update, context): return
 
         logger.info(f"👁️ {user_log} Scenario 1: Text is Reply to Photo. Forcing Vision.")
         await _process_text_as_vision_prompt(update, context, message.reply_to_message, text)
-        return 
-        
+        return
+
     logger.info(f"📩 {user_log} Message: '{text}'")
-    
+
     # --- СЦЕНАРІЙ 2 ---
     if should_respond(update, context):
         try:
             history = []
-            async for msg in context.application.bot.get_chat_history(chat_id=chat_id, limit=3): 
+            async for msg in context.application.bot.get_chat_history(chat_id=chat_id, limit=3):
                 history.append(msg)
-            
+
             media_message = None
             for msg in history:
                 is_photo = msg.photo or (msg.document and msg.document.mime_type and msg.document.mime_type.startswith('image'))
@@ -160,17 +160,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         media_message = msg
                         logger.info(f"   -> Found adjacent photo (Scen 2). Time diff: {time_diff}s.")
                         break
-            
+
             if media_message:
                 await _process_text_as_vision_prompt(update, context, media_message, text)
-                return 
+                return
         except Exception as e:
             logger.debug(f"ℹ️ {user_log} Scen 2 check skipped/failed: {e}")
 
     # 1. Reminders
     if text == "⏰ Нагадування":
         logger.info(f"🔘 {user_log} Clicked 'Reminders'")
-        
+
         # ВИПРАВЛЕНО: Примусове видалення кнопок у групі
         if not is_private:
             await remove_keyboard_in_group(update, context)
@@ -262,7 +262,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             author = r.from_user.full_name if r.from_user else "User"
             final_prompt = f"--- QUOTED MESSAGE FROM {author} ---\n{r.text or r.caption or '[Text/Media]'}\n--- END ---\n\nUSER REQUEST: {text}"
             logger.info(f"   -> Added reply context from {author}")
-        
+
         await context_manager.save_message(user.id, chat_id, 'user', final_prompt)
         await process_gpt_request(update, context, user.id)
     else:

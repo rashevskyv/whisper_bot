@@ -46,8 +46,8 @@ class OpenAIProvider(LLMProvider):
                     "name": "schedule_reminder",
                     "description": "Schedule reminder in DB.",
                     "parameters": {
-                        "type": "object", 
-                        "properties": {"iso_time_utc": {"type": "string"}, "text": {"type": "string"}}, 
+                        "type": "object",
+                        "properties": {"iso_time_utc": {"type": "string"}, "text": {"type": "string"}},
                         "required": ["iso_time_utc", "text"]
                     }
                 }
@@ -58,8 +58,8 @@ class OpenAIProvider(LLMProvider):
                     "name": "delete_reminder",
                     "description": "Delete reminder.",
                     "parameters": {
-                        "type": "object", 
-                        "properties": {"reminder_id": {"type": "integer"}}, 
+                        "type": "object",
+                        "properties": {"reminder_id": {"type": "integer"}},
                         "required": ["reminder_id"]
                     }
                 }
@@ -89,23 +89,23 @@ class OpenAIProvider(LLMProvider):
 
         try: tz = zoneinfo.ZoneInfo(user_tz_name)
         except: tz = zoneinfo.ZoneInfo("UTC")
-            
+
         now_local = datetime.datetime.now(tz)
         current_time_meta = now_local.strftime('%Y-%m-%d %H:%M:%S (%A)')
-        
+
         active_reminders_text = "None"
         if chat_id and not disable_tools:
             active_reminders_text = await scheduler_service.get_active_reminders_string(chat_id, user_tz_name)
 
         local_messages = [msg.copy() for msg in messages]
-        
+
         # System Prompt Injection (base)
         sys_idx = next((i for i, m in enumerate(local_messages) if m['role'] == 'system'), None)
         system_base = "STRICT RULES: Be helpful and concise."
-        
+
         if not disable_tools:
             system_base += "\nFor reminders: use [REAL-TIME CLOCK] to calculate absolute time. Tool order: calculate_date -> schedule_reminder."
-        
+
         if sys_idx is not None: local_messages[sys_idx]['content'] += f"\n{system_base}"
         else: local_messages.insert(0, {"role": "system", "content": system_base})
 
@@ -117,7 +117,7 @@ class OpenAIProvider(LLMProvider):
             f"Active Reminders:\n{active_reminders_text}\n"
             f"--- END METADATA ---"
         )
-        
+
         for msg in reversed(local_messages):
             if msg['role'] == 'user':
                 msg['content'] = f"{clock_metadata}\n\nUSER REQUEST: {msg['content']}"
@@ -135,7 +135,7 @@ class OpenAIProvider(LLMProvider):
                 tool_calls_buffer = {}
                 is_tool_call = False
                 response = None
-                
+
                 async for chunk in stream:
                     if not chunk.choices: continue
                     delta = chunk.choices[0].delta
@@ -188,7 +188,7 @@ class OpenAIProvider(LLMProvider):
                         content = await perform_search(args.get("query"))
 
                     local_messages.append({"role": "tool", "tool_call_id": tc["id"], "content": str(content)})
-                
+
                 if should_stop_stream: break
                 stream = await self.client.chat.completions.create(model=model, messages=local_messages, tools=tools, stream=True)
         except Exception as e:

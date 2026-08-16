@@ -8,7 +8,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Kiev") 
+BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Kiev")
 
 admin_ids_str = os.getenv("ADMIN_IDS", "")
 try:
@@ -42,8 +42,8 @@ AVAILABLE_MODELS = {
 # МОДЕЛІ ТРАНСКРИБАЦІЇ
 TRANSCRIPTION_MODELS = {
     "openai": [
-        "whisper-1", 
-        "gpt-4o-transcribe", 
+        "whisper-1",
+        "gpt-4o-transcribe",
         "gpt-4o-mini-transcribe"
     ],
     "google": [
@@ -131,13 +131,13 @@ DEFAULT_SETTINGS = {
     'rewrite': True,
     'temperature': 0.7,
     'model': 'gpt-4o-mini',
-    'transcription_model': 'whisper-1', 
+    'transcription_model': 'whisper-1',
     'language': 'uk',
     'system_prompt': PERSONAS['assistant']['prompt'],
     'allow_search': True,
     'show_model_name': False,
     'disable_tools': False,
-    
+
     'summary_prompt': (
         "Ти — аналітик. Перетвори текст на стислий звіт.\n"
         "1. Видали вступ та 'воду'.\n"
@@ -145,7 +145,7 @@ DEFAULT_SETTINGS = {
         "3. Використовуй '•' для списків.\n"
         "4. Формат: Тільки чистий HTML."
     ),
-    
+
     'reword_prompt': (
         "Ти — редактор. Перепиши текст літературною мовою.\n"
         "1. Виправи помилки, прибери слова-паразити.\n"
@@ -179,9 +179,9 @@ DEFAULT_GROUP_SETTINGS = {
     'allow_search': True,
     'show_model_name': False,
     'disable_tools': False,
-    
-    'trigger_mode': 'keywords', 
-    'auto_transcribe': True,    
-    'answer_in_thread': True,   
-    'admin_only_settings': True 
+
+    'trigger_mode': 'keywords',
+    'auto_transcribe': True,
+    'answer_in_thread': True,
+    'admin_only_settings': True
 }

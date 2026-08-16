@@ -34,13 +34,13 @@ class ContextManager:
         async with AsyncSessionLocal() as session:
             # 1. System Prompt (Беремо по chat_id!)
             chat_settings_obj = await session.get(User, chat_id)
-            
+
             if chat_settings_obj:
                 sys_prompt = chat_settings_obj.system_prompt
             else:
                 # Якщо налаштувань для чату ще немає, беремо дефолт
                 sys_prompt = DEFAULT_GROUP_SETTINGS['system_prompt'] if chat_id < 0 else DEFAULT_SETTINGS['system_prompt']
-            
+
             messages.append({"role": "system", "content": sys_prompt})
 
             # 2. Історія (тільки активні ролі: user/assistant)
@@ -53,8 +53,8 @@ class ContextManager:
                         # а не тільки одного юзера (хіба що ви хочете повної ізоляції навіть всередині групи).
                         # Але зазвичай в групах контекст спільний.
                         # Якщо треба ізоляція по юзеру - розкоментуйте рядок нижче:
-                        # MessageCache.user_id == user_id, 
-                        
+                        # MessageCache.user_id == user_id,
+
                         MessageCache.chat_id == chat_id,
                         MessageCache.timestamp >= since_time,
                         MessageCache.role.in_(['user', 'assistant'])
@@ -63,7 +63,7 @@ class ContextManager:
                 .order_by(desc(MessageCache.timestamp))
                 .limit(limit)
             )
-            
+
             result = await session.execute(stmt)
             history_objs = result.scalars().all()
             for msg in reversed(history_objs):

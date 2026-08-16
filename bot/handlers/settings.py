@@ -23,25 +23,25 @@ async def check_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Перевіряє, чи є користувач адміном групи. Якщо ні - кидає алерт."""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    
+
     # У приватних чатах перевірка не потрібна (сам собі адмін)
     if update.effective_chat.type == 'private':
         return True
-        
+
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status in ['administrator', 'creator']:
             return True
     except Exception as e:
         logger.error(f"Error checking admin: {e}")
-    
+
     # Якщо дійшло сюди - користувач не адмін
     if update.callback_query:
         await update.callback_query.answer("🔒 Налаштування доступні лише адміністраторам групи!", show_alert=True)
     else:
         try: await update.message.reply_text("🔒 Тільки для адміністраторів.")
         except: pass
-        
+
     return False
 
 # --- УНІВЕРСАЛЬНА ФУНКЦІЯ ОНОВЛЕННЯ ---
@@ -57,11 +57,11 @@ async def update_setting(chat_id, key, value):
 def get_main_menu_keyboard():
     keyboard = [
         [
-            InlineKeyboardButton("🧠 Чат Модель", callback_data="model_menu"), 
+            InlineKeyboardButton("🧠 Чат Модель", callback_data="model_menu"),
             InlineKeyboardButton("🎙 Транскрибація", callback_data="transcription_menu")
         ],
         [
-            InlineKeyboardButton("🌐 Мова", callback_data="lang_menu"), 
+            InlineKeyboardButton("🌐 Мова", callback_data="lang_menu"),
             InlineKeyboardButton("🎭 Персона", callback_data="persona_menu")
         ],
         [
@@ -76,54 +76,54 @@ def get_main_menu_keyboard():
 
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    
+
     # 1. ПЕРЕВІРКА ПРАВ
     if not await check_group_admin(update, context): return
 
     target_id = update.effective_chat.id
     user_id = update.effective_user.id
     is_bot_admin = user_id in ADMIN_IDS
-    
+
     async with AsyncSessionLocal() as session:
         db_obj = await session.get(User, target_id)
         if not db_obj:
             await get_or_create_user(update.effective_chat)
             db_obj = await session.get(User, target_id)
-            
+
         settings = db_obj.settings if db_obj else DEFAULT_GROUP_SETTINGS
         show_debug = settings.get('show_model_name', False)
-        
+
     debug_icon = "✅" if show_debug else "❌"
-    
+
     keyboard = [
         [
-            InlineKeyboardButton("🧠 Чат Модель", callback_data="model_menu"), 
+            InlineKeyboardButton("🧠 Чат Модель", callback_data="model_menu"),
             InlineKeyboardButton("🎙 Транскрибація", callback_data="transcription_menu")
         ],
         [
-            InlineKeyboardButton("🌐 Мова", callback_data="lang_menu"), 
+            InlineKeyboardButton("🌐 Мова", callback_data="lang_menu"),
             InlineKeyboardButton("🎭 Персона", callback_data="persona_menu")
         ],
         [
             InlineKeyboardButton("🌍 Часовий пояс", callback_data="timezone_menu")
         ]
     ]
-    
+
     if update.effective_chat.type == 'private':
         keyboard.append([InlineKeyboardButton("🔑 Ключі API", callback_data="keys_menu")])
-    
+
     if is_bot_admin:
         keyboard.append([
             InlineKeyboardButton(f"{debug_icon} Режим налагодження", callback_data="toggle_debug")
         ])
-        
+
     keyboard.append([InlineKeyboardButton("🗑 Очистити контекст", callback_data="reset_context")])
     keyboard.append([InlineKeyboardButton("🔙 Закрити", callback_data="close_menu")])
-    
+
     try:
         await query.edit_message_text(
-            f"⚙️ <b>Налаштування:</b> {update.effective_chat.title or 'Приват'}", 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
+            f"⚙️ <b>Налаштування:</b> {update.effective_chat.title or 'Приват'}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='HTML'
         )
     except BadRequest: pass
@@ -134,7 +134,7 @@ async def toggle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await query.answer("🔒 Тільки для власника бота.")
         return
-        
+
     target_id = update.effective_chat.id
     new_state = False
     async with AsyncSessionLocal() as session:
@@ -145,7 +145,7 @@ async def toggle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
             settings['show_model_name'] = new_state
             user.settings = settings
             await session.commit()
-    
+
     await query.answer(f"Дебаг: {'Ввімкнено' if new_state else 'Вимкнено'}")
     await settings_menu(update, context)
 
@@ -160,7 +160,7 @@ async def close_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset_context_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await check_group_admin(update, context): return
-    
+
     await query.answer("Контекст діалогу очищено!", show_alert=True)
     await settings_menu(update, context)
 
@@ -169,27 +169,27 @@ async def reset_context_handler(update: Update, context: ContextTypes.DEFAULT_TY
 async def transcription_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ПЕРЕВІРКА ПРАВ
     if not await check_group_admin(update, context): return
-    
+
     query = update.callback_query
     chat_id = update.effective_chat.id
-    
+
     async with AsyncSessionLocal() as session:
         obj = await session.get(User, chat_id)
         current_model = obj.settings.get('transcription_model', 'whisper-1') if obj else 'whisper-1'
-    
+
     text = f"🎙 <b>Модель транскрибації:</b> <code>{current_model}</code>"
     keyboard = []
-    
+
     if bool(os.getenv("OPENAI_API_KEY")):
-        for m in TRANSCRIPTION_MODELS['openai']: 
+        for m in TRANSCRIPTION_MODELS['openai']:
             label = f"✅ {m}" if current_model == m else m
             keyboard.append([InlineKeyboardButton(label, callback_data=f"set_trans_{m}")])
-            
+
     if bool(os.getenv("GOOGLE_API_KEY")):
-        for m in TRANSCRIPTION_MODELS['google']: 
+        for m in TRANSCRIPTION_MODELS['google']:
             label = f"✅ {m}" if current_model == m else m
             keyboard.append([InlineKeyboardButton(label, callback_data=f"set_trans_{m}")])
-            
+
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
     try: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     except BadRequest: pass
@@ -206,11 +206,11 @@ async def language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return
     query = update.callback_query
     chat_id = update.effective_chat.id
-    
+
     async with AsyncSessionLocal() as session:
         obj = await session.get(User, chat_id)
         current = obj.settings.get('language', 'uk') if obj else 'uk'
-    
+
     langs = [('🇺🇦 Українська', 'uk'), ('🇬🇧 English', 'en'), ('🇷🇺 Русский', 'ru')]
     keyboard = []
     for label, code in langs:
@@ -232,23 +232,23 @@ async def model_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return
     query = update.callback_query
     chat_id = update.effective_chat.id
-    
+
     async with AsyncSessionLocal() as session:
         obj = await session.get(User, chat_id)
         current = obj.settings.get('model', DEFAULT_SETTINGS['model']) if obj else DEFAULT_SETTINGS['model']
 
     keyboard = []
-    for m in AVAILABLE_MODELS['openai']['common']: 
+    for m in AVAILABLE_MODELS['openai']['common']:
         keyboard.append([InlineKeyboardButton(f"✅ {m}" if current == m else m, callback_data=f"set_model_{m}")])
-    
+
     if bool(os.getenv("OPENAI_API_KEY")) or update.effective_user.id in ADMIN_IDS:
-        for m in AVAILABLE_MODELS['openai']['advanced']: 
+        for m in AVAILABLE_MODELS['openai']['advanced']:
             keyboard.append([InlineKeyboardButton(f"✅ {m}" if current == m else m, callback_data=f"set_model_{m}")])
-            
+
     if bool(os.getenv("GOOGLE_API_KEY")) or update.effective_user.id in ADMIN_IDS:
-        for m in AVAILABLE_MODELS['google']: 
+        for m in AVAILABLE_MODELS['google']:
             keyboard.append([InlineKeyboardButton(f"✅ {m}" if current == m else m, callback_data=f"set_model_{m}")])
-    
+
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
     try: await query.edit_message_text(f"🤖 Модель чату: {current}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     except BadRequest: pass
@@ -265,15 +265,15 @@ async def persona_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return
     query = update.callback_query
     chat_id = update.effective_chat.id
-    
+
     async with AsyncSessionLocal() as session:
         obj = await session.get(User, chat_id)
         current_prompt = obj.system_prompt if obj else PERSONAS['assistant']['prompt']
-        
+
     current_key = "custom"
     for key, data in PERSONAS.items():
         if data['prompt'] == current_prompt: current_key = key; break
-        
+
     keyboard = []
     row = []
     for key, data in PERSONAS.items():
@@ -281,7 +281,7 @@ async def persona_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row.append(InlineKeyboardButton(label, callback_data=f"set_persona_{key}"))
         if len(row) == 2: keyboard.append(row); row = []
     if row: keyboard.append(row)
-    
+
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
     try: await query.edit_message_text("🎭 Оберіть характер бота:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     except BadRequest: pass
@@ -290,7 +290,7 @@ async def set_persona(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return
     query = update.callback_query
     key = query.data.replace("set_persona_", "")
-    
+
     if key in PERSONAS:
         async with AsyncSessionLocal() as session:
             obj = await session.get(User, update.effective_chat.id)
@@ -304,11 +304,11 @@ async def timezone_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return
     query = update.callback_query
     chat_id = update.effective_chat.id
-    
+
     async with AsyncSessionLocal() as session:
         obj = await session.get(User, chat_id)
         current_tz = obj.settings.get('timezone', 'Europe/Kiev') if obj else 'Europe/Kiev'
-        
+
     keyboard = [
         [InlineKeyboardButton("🇺🇦 Kyiv", callback_data="set_tz_Europe/Kiev")],
         [InlineKeyboardButton("🇬🇧 London", callback_data="set_tz_Europe/London")],
@@ -332,7 +332,7 @@ async def keys_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private':
         await update.callback_query.answer("❌ Ключі тільки в приваті.", show_alert=True)
         return
-        
+
     query = update.callback_query
     user_id = update.effective_user.id
     async with AsyncSessionLocal() as session:
@@ -361,7 +361,7 @@ async def save_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not provider: return WAITING_FOR_KEY
     encrypted = key_manager.encrypt(key_text)
     async with AsyncSessionLocal() as session:
-        user = await session.get(User, user_id) 
+        user = await session.get(User, user_id)
         if not user:
              from config import DEFAULT_SETTINGS
              user = User(id=user_id, settings=DEFAULT_SETTINGS, system_prompt=DEFAULT_SETTINGS['system_prompt'])
@@ -428,7 +428,7 @@ async def save_custom_timezone(update: Update, context: ContextTypes.DEFAULT_TYP
     if not await check_group_admin(update, context): return ConversationHandler.END
     tz = update.message.text.strip()
     try: zoneinfo.ZoneInfo(tz)
-    except: 
+    except:
         await update.message.reply_text("❌ Невірна зона.")
         return WAITING_FOR_TIMEZONE
     await update_setting(update.effective_chat.id, 'timezone', tz)

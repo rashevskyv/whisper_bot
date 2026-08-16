@@ -21,7 +21,7 @@ async def process_vision_request_from_text_handler(update: Update, context: Cont
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     user_log = get_log_user(update.effective_user, chat_id)
-    
+
     # 1. Визначаємо ID файлу з об'єкта повідомлення (це може бути фото або документ)
     photo_file_id = None
     if photo_message.photo:
@@ -29,7 +29,7 @@ async def process_vision_request_from_text_handler(update: Update, context: Cont
         photo_file_id = photo_message.photo[-1].file_id
     elif photo_message.document:
         photo_file_id = photo_message.document.file_id
-        
+
     if not photo_file_id:
         await update.message.reply_text("❌ Помилка: Не знайдено зображення для аналізу.")
         return
@@ -37,7 +37,7 @@ async def process_vision_request_from_text_handler(update: Update, context: Cont
     # 2. Повідомляємо користувача про початок обробки
     status_msg = await update.message.reply_text("👀 Дивлюсь...", quote=True)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    
+
     provider = await get_ai_provider(user_id)
     if not provider:
         await status_msg.edit_text("❌ Немає доступу до AI (відсутній провайдер).")
@@ -50,26 +50,26 @@ async def process_vision_request_from_text_handler(update: Update, context: Cont
         # Генеруємо унікальне ім'я
         image_path = await download_file(tg_file, f"vis_reply_{photo_message.message_id}")
         temp_files.append(image_path)
-        
+
         # 4. Підготовка контексту
         messages = await context_manager.get_context(user_id, chat_id, limit=5)
         settings = await get_user_model_settings(user_id)
-        
+
         full_response = ""
         last_len = 0
-        
+
         # 5. Виклик Vision API
         async for chunk in provider.analyze_image(image_path, prompt_text, messages, settings):
             full_response += chunk
             # Оновлюємо статус не надто часто
             if len(full_response) - last_len > 50:
-                try: 
+                try:
                     await status_msg.edit_text(full_response + " ▌")
                     last_len = len(full_response)
                 except: pass
 
         await status_msg.delete()
-        
+
         # 6. Відправка фінальної відповіді
         # Додаємо назву моделі, якщо увімкнено дебаг
         if settings.get('show_model_name', False):
@@ -77,11 +77,11 @@ async def process_vision_request_from_text_handler(update: Update, context: Cont
             full_response = f"[{model_name}]\n{full_response}"
 
         await send_long_message(update.message, full_response, parse_mode=ParseMode.HTML, reply_to_msg_id=update.message.message_id)
-        
+
         # 7. Збереження в історію
         await context_manager.save_message(user_id, chat_id, 'user', f"[Vision Reply to {photo_message.message_id}]: {prompt_text}")
         await context_manager.save_message(user_id, chat_id, 'assistant', full_response)
-        
+
         logger.info(f"✅ {user_log} Vision response sent via Reply scenario.")
 
     except Exception as e:
@@ -93,23 +93,23 @@ async def process_vision_request_from_text_handler(update: Update, context: Cont
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Стандартна обробка фото (якщо воно надіслане як фото)."""
     if not update.message: return
-    
+
     # У групах реагуємо тільки на реплаї або явні тригери, якщо це не приват
     if not should_respond(update, context) and update.effective_chat.type != 'private':
         return
-        
+
     message = update.message
     caption = message.caption
     media_group_id = message.media_group_id
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     user_log = get_log_user(update.effective_user, chat_id)
-    
+
     # Кешування для альбомів
     if media_group_id:
         if caption: MEDIA_GROUP_CACHE[media_group_id] = caption
         elif media_group_id in MEDIA_GROUP_CACHE: caption = MEDIA_GROUP_CACHE[media_group_id]
-    
+
     # Якщо є підпис (Caption) — це запит до фото
     if caption:
         logger.info(f"📸 {user_log} Vision Request with Caption: '{caption[:20]}...'")
@@ -121,38 +121,38 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if message.reply_to_message:
             reply_msg = message.reply_to_message
             final_prompt = f"CONTEXT (User replied to): {reply_msg.text or reply_msg.caption or '[Media]'}\n\nPROMPT: {caption}"
-        
+
         status_msg = await message.reply_text("👀 Дивлюсь...", quote=True)
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        
+
         temp_files = []
         try:
             photo_file = await message.photo[-1].get_file()
             image_path = await download_file(photo_file, f"vis_{message.message_id}")
             temp_files.append(image_path)
-            
+
             messages = await context_manager.get_context(user_id, chat_id, limit=5)
             settings = await get_user_model_settings(user_id)
-            
+
             full_response = ""
             last_len = 0
-            
+
             async for chunk in provider.analyze_image(image_path, final_prompt, messages, settings):
                 full_response += chunk
                 if len(full_response) - last_len > 50:
-                    try: 
+                    try:
                         await status_msg.edit_text(full_response + " ▌")
                         last_len = len(full_response)
                     except: pass
-            
+
             await status_msg.delete()
-            
+
             if settings.get('show_model_name', False):
                 model_name = settings.get('model', 'unknown')
                 full_response = f"[{model_name}]\n{full_response}"
 
             await send_long_message(message, full_response, parse_mode=ParseMode.HTML, reply_to_msg_id=message.message_id)
-            
+
             await context_manager.save_message(user_id, chat_id, 'user', f"[Vision Caption]: {final_prompt}")
             await context_manager.save_message(user_id, chat_id, 'assistant', full_response)
             logger.info(f"✅ {user_log} Vision response sent.")
@@ -168,7 +168,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat.type == 'private':
             kb = [
                 [InlineKeyboardButton("🖼 Описати", callback_data="photo_desc"), InlineKeyboardButton("📄 Текст (OCR)", callback_data="photo_read")],
-                [InlineKeyboardButton("💬 Запит до зображення", callback_data="ask_photo_prompt")], 
+                [InlineKeyboardButton("💬 Запит до зображення", callback_data="ask_photo_prompt")],
                 [InlineKeyboardButton("🗑 Видалити", callback_data="delete_msg")]
             ]
             await update.message.reply_text("Дії із зображенням:", reply_markup=InlineKeyboardMarkup(kb), quote=True)
@@ -179,7 +179,7 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     chat_id = update.effective_chat.id
     user_log = get_log_user(user, chat_id)
-    
+
     if update.message.video and update.effective_chat.type != 'private':
         if not should_respond(update, context): return
 
@@ -202,18 +202,18 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
         tg_file = await context.bot.get_file(file_obj.file_id)
         input_path = await download_file(tg_file, file_obj.file_id)
         temp_files.append(input_path)
-        
+
         audio_path = await extract_audio(input_path) if is_video else input_path
         if is_video: temp_files.append(audio_path)
 
         if status: await status.edit_text("🎙 Розпізнаю...")
         settings = await get_user_model_settings(user.id)
-        
+
         # 1. Транскрибація
         logger.info(f"   -> Sending to Transcribe Model...")
         raw_text = await provider.transcribe(audio_path, language=settings.get('language', 'uk'))
         transcription_model = settings.get('transcription_model', 'whisper-1')
-        
+
         # Debug вивід raw тексту
         if settings.get('show_model_name', False):
             try:
@@ -223,7 +223,7 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # 2. Оформлення (Beautify)
         if status: await status.edit_text("✨ Оформлюю...")
         clean_text, beautify_model = await beautify_text(user.id, raw_text)
-        
+
         if status: await status.delete()
 
         if clean_text:
@@ -234,22 +234,22 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     [InlineKeyboardButton("📝 Підсумувати", callback_data="summarize"), InlineKeyboardButton("✍️ Переформулювати", callback_data="reword")],
                     [InlineKeyboardButton("🗑 Видалити", callback_data="delete_msg")]
                 ])
-            
+
             final_output = clean_text
             if settings.get('show_model_name', False):
                 final_output = f"[{beautify_model}]\n{clean_text}"
 
             await context_manager.save_message(user.id, chat_id, 'transcription', clean_text)
-            
+
             await send_long_message(
-                update.message, 
-                f"<code>{final_output}</code>", 
-                reply_markup=kb, 
+                update.message,
+                f"<code>{final_output}</code>",
+                reply_markup=kb,
                 parse_mode=ParseMode.HTML,
                 reply_to_msg_id=update.message.message_id
             )
             logger.info(f"✅ {user_log} Transcription sent.")
-            
+
     except Exception as e:
         logger.error(f"❌ {user_log} Media error: {e}")
         if status: await status.edit_text(f"❌ {e}")

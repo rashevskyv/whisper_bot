@@ -17,11 +17,11 @@ from bot.handlers.callbacks import handle_callback
 
 # Settings Handlers
 from bot.handlers.settings import (
-    settings_menu, keys_menu, ask_for_key, save_key, delete_key, 
+    settings_menu, keys_menu, ask_for_key, save_key, delete_key,
     reset_context_handler, cancel_conversation, close_menu,
     model_menu, set_model, ask_custom_model, save_custom_model,
     persona_menu, set_persona, ask_custom_prompt, save_custom_prompt,
-    language_menu, set_language_gui, 
+    language_menu, set_language_gui,
     transcription_menu, set_transcription_model,
     timezone_menu, set_timezone_btn, ask_custom_timezone, save_custom_timezone,
     toggle_debug, ask_photo_prompt, process_photo_prompt, # <--- ДОДАНО: фото хендлери
@@ -53,7 +53,7 @@ def main():
 
     req = HTTPXRequest(
         connection_pool_size=8,
-        connect_timeout=120.0, 
+        connect_timeout=120.0,
         read_timeout=120.0,
         write_timeout=120.0
     )
@@ -107,9 +107,9 @@ def main():
         per_message=False
     )
     app.add_handler(photo_prompt_conv)
-    
+
     app.add_handler(CommandHandler("start", start))
-    
+
     # Callbacks
     app.add_handler(CallbackQueryHandler(settings_menu, pattern="^settings_menu$"))
     app.add_handler(CallbackQueryHandler(close_menu, pattern="^close_menu$"))
@@ -131,23 +131,23 @@ def main():
 
     # --- Handlers ---
     app.add_handler(MessageHandler(
-        filters.CaptionRegex(r"^task_id:"), 
+        filters.CaptionRegex(r"^task_id:"),
         handle_internal_task
     ))
 
     # Media
     app.add_handler(MessageHandler(filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE, handle_voice_video))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
+
     # Text
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    
+
     # Generic Callback
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     print("✅ [MainBot] Started polling.")
     app.run_polling()
-    
+
 if __name__ == '__main__':
     os.makedirs("temp", exist_ok=True)
     main()

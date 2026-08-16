@@ -57,7 +57,7 @@ class GoogleProvider(LLMProvider):
     async def generate_stream(self, messages: List[Dict[str, str]], settings: Dict[str, Any]) -> AsyncGenerator[str, None]:
         model_name = settings.get('model', self.model_name)
         disable_tools = settings.get('disable_tools', False) # ПРАПОРЕЦЬ
-        
+
         user_tz_name = settings.get('timezone', BOT_TIMEZONE)
         try: tz = zoneinfo.ZoneInfo(user_tz_name)
         except: tz = datetime.timezone.utc
@@ -68,11 +68,11 @@ class GoogleProvider(LLMProvider):
         active_reminders_text = await scheduler_service.get_active_reminders_string(chat_id, user_tz_name) if (chat_id and not disable_tools) else "None"
 
         system_instruction_text, history = self._map_messages(messages)
-        
+
         tech_instruction = f"\n\n[REAL-TIME CLOCK] {current_time_str}. Timezone: {user_tz_name}."
         if not disable_tools:
             tech_instruction += f"\nReminders: {active_reminders_text}. Use tools for reminders."
-        
+
         full_sys_inst = (system_instruction_text or "") + tech_instruction
 
         prompt_content = "Hello"
@@ -82,10 +82,10 @@ class GoogleProvider(LLMProvider):
 
         # ВАЖЛИВО: tools = None, якщо disable_tools=True
         tools_obj = self._get_tools_proto(settings.get('allow_search', True)) if not disable_tools else None
-        
+
         model = genai.GenerativeModel(model_name=model_name, system_instruction=full_sys_inst, tools=[tools_obj] if tools_obj else None)
         chat = model.start_chat(history=history)
-        
+
         keep_generating = True
         current_prompt = prompt_content
 
@@ -93,42 +93,42 @@ class GoogleProvider(LLMProvider):
             keep_generating = False
             try:
                 response_stream = await chat.send_message_async(
-                    current_prompt, 
+                    current_prompt,
                     generation_config=genai.types.GenerationConfig(temperature=settings.get('temperature', 0.7)),
                     stream=True
                 )
 
                 function_call_found = False
                 function_call_part = None
-                
+
                 async for chunk in response_stream:
                     if chunk.candidates and chunk.candidates[0].content.parts:
                         part = chunk.candidates[0].content.parts[0]
                         if part.function_call:
                             function_call_found = True
                             function_call_part = part.function_call
-                            break 
+                            break
                     if chunk.text: yield chunk.text
 
                 # Логування токенів після завершення потоку
                 if response_stream and response_stream.usage_metadata:
                     usage = response_stream.usage_metadata
                     logger.info(f"📊 [Gemini] Usage: Prompt={usage.prompt_token_count}, Candidates={usage.candidates_token_count}, Total={usage.total_token_count}")
-                
+
                 if function_call_found:
                     try: await response_stream.resolve()
                     except: pass
-                    
+
                     fn_name = function_call_part.name
                     fn_args = {k: v for k, v in function_call_part.args.items()}
                     logger.info(f"🤖 Gemini Tool: {fn_name} | Args: {fn_args}")
                     api_response = {}
-                    
+
                     if fn_name == "calculate_date":
                         res = calculate_future_date(fn_args.get("local_datetime"), user_tz_name)
                         api_response = {"iso_date_utc": res}
                         keep_generating = True
-                        
+
                     elif fn_name == "schedule_reminder":
                         try:
                             iso = fn_args.get("iso_time_utc")
@@ -146,7 +146,7 @@ class GoogleProvider(LLMProvider):
                         success = await scheduler_service.delete_reminder_by_id(int(fn_args.get("reminder_id")))
                         api_response = {"status": "deleted" if success else "error"}
                         if success: yield f"\n🗑 <b>Видалено ID: {fn_args.get('reminder_id')}</b>"
-                        
+
                     elif fn_name == "web_search":
                         res = await perform_search(fn_args.get("query", ""))
                         api_response = {"result": res}

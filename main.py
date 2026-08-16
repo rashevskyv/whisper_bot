@@ -17,16 +17,16 @@ def run_process(command, label, color):
     """Запускає процес у фоні та повертає об'єкт процесу"""
     print(f"{color}🚀 Запуск {label}...{Colors.RESET}")
     return subprocess.Popen(
-        command, 
-        shell=True, 
-        stdout=sys.stdout, 
+        command,
+        shell=True,
+        stdout=sys.stdout,
         stderr=sys.stderr,
         env={**os.environ, "PYTHONUNBUFFERED": "1"}
     )
 
 def main():
     print(f"{Colors.HEADER}=== WHISPER BOT ORCHESTRATOR ==={Colors.RESET}")
-    
+
     # ВАЖЛИВО: Використовуємо поточний інтерпретатор (з venv)
     python_exec = sys.executable
 
@@ -44,9 +44,9 @@ def main():
     # Використовуємо python_exec замість "python3"
     # userbot = run_process(f"{python_exec} userbot.py", "Userbot", Colors.BLUE)
     userbot = None
-    
+
     time.sleep(2)
-    
+
     # 3. Запуск Main Bot (bot_runner.py)
     mainbot = run_process(f"{python_exec} bot_runner.py", "Main Bot", Colors.GREEN)
 
@@ -61,25 +61,25 @@ def main():
                 print(f"{Colors.RED}💀 Userbot впав! Перезапуск через 3 сек...{Colors.RESET}")
                 time.sleep(3)
                 userbot = run_process(f"{python_exec} userbot.py", "Userbot", Colors.BLUE)
-            
+
             if mainbot.poll() is not None:
                 print(f"{Colors.RED}💀 Main Bot впав! Перезапуск через 3 сек...{Colors.RESET}")
                 time.sleep(3)
                 mainbot = run_process(f"{python_exec} bot_runner.py", "Main Bot", Colors.GREEN)
-                
+
             time.sleep(1)
-            
+
     except KeyboardInterrupt:
         print(f"\n{Colors.YELLOW}🛑 Отримано сигнал зупинки...{Colors.RESET}")
-        
-        if userbot: 
+
+        if userbot:
             userbot.terminate()
             print(f"👋 Userbot зупинено.")
-        
-        if mainbot: 
+
+        if mainbot:
             mainbot.terminate()
             print(f"👋 Main Bot зупинено.")
-            
+
         print(f"{Colors.HEADER}🏁 Роботу завершено.{Colors.RESET}")
 
 if __name__ == "__main__":
