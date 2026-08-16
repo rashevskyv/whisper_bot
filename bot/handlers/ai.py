@@ -15,7 +15,6 @@ async def stream_response(provider, messages, status_msg, user_id, chat_id, sett
     last_update_len = 0
     is_streaming_active = True
     
-    # Додаємо префікс, якщо увімкнено дебаг
     if settings.get('show_model_name', False):
         model_name = settings.get('model', 'unknown')
         full_response = f"[{model_name}] "
@@ -46,7 +45,6 @@ async def stream_response(provider, messages, status_msg, user_id, chat_id, sett
                 except Exception:
                     pass
         
-        # Фіналізація
         if len(full_response) <= 4000:
             try:
                 safe_text = clean_html(full_response)
@@ -90,6 +88,28 @@ async def process_gpt_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     if manual_text:
         messages.append({"role": "user", "content": manual_text})
         
+    # --- ВИЗНАЧЕННЯ СТАТУСУ КОРИСТУВАЧА ---
+    # Це потрібно для персони "Вельможа" (і потенційно інших)
+    user_status_label = "CHELIAD (COMMONER)"
+    
+    # 1. Якщо це приватний чат - користувач завжди "Пан" (Admin of his own chat)
+    if update.effective_chat.type == 'private':
+        user_status_label = "PAN (ADMIN)"
+    else:
+        # 2. Якщо група - перевіряємо адміна
+        try:
+            member = await context.bot.get_chat_member(chat_id, user_id)
+            if member.status in ['administrator', 'creator']:
+                user_status_label = "PAN (ADMIN)"
+        except: pass
+    
+    # Додаємо системну інструкцію про статус в кінець повідомлень
+    # Це невидимо для користувача, але видно для ШІ
+    messages.append({
+        "role": "system", 
+        "content": f"[SYSTEM INFO] Current Speaker Status: {user_status_label}. React accordingly to your persona."
+    })
+    
     await stream_response(provider, messages, status_msg, user_id, chat_id, settings, reply_to_msg_id=reply_to_id)
 
 async def summarize_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text_to_summarize: str):

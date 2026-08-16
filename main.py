@@ -31,18 +31,19 @@ def main():
     python_exec = sys.executable
 
     # 1. Перевірка сесії Юзербота
-    if not os.path.exists("my_userbot.session"):
-        print(f"{Colors.RED}❌ ПОМИЛКА: Файл 'my_userbot.session' не знайдено!{Colors.RESET}")
-        print(f"{Colors.YELLOW}⚠️ НЕОБХІДНА АВТОРИЗАЦІЯ:{Colors.RESET}")
-        print(f"1. Зупиніть цей скрипт.")
-        print(f"2. Запустіть вручну: {python_exec} userbot.py")
-        print(f"3. Введіть номер телефону та код.")
-        print(f"4. Після успішного входу запустіть start.sh знову.")
-        return
+    # if not os.path.exists("my_userbot.session"):
+    #     print(f"{Colors.RED}❌ ПОМИЛКА: Файл 'my_userbot.session' не знайдено!{Colors.RESET}")
+    #     print(f"{Colors.YELLOW}⚠️ НЕОБХІДНА АВТОРИЗАЦІЯ:{Colors.RESET}")
+    #     print(f"1. Зупиніть цей скрипт.")
+    #     print(f"2. Запустіть вручну: {python_exec} userbot.py")
+    #     print(f"3. Введіть номер телефону та код.")
+    #     print(f"4. Після успішного входу запустіть start.sh знову.")
+    #     return
 
-    # 2. Запуск Userbot
+    # 2. Запуск Userbot (вимкнено)
     # Використовуємо python_exec замість "python3"
-    userbot = run_process(f"{python_exec} userbot.py", "Userbot", Colors.BLUE)
+    # userbot = run_process(f"{python_exec} userbot.py", "Userbot", Colors.BLUE)
+    userbot = None
     
     time.sleep(2)
     
@@ -56,7 +57,7 @@ def main():
     try:
         while True:
             # Перевіряємо, чи живі процеси
-            if userbot.poll() is not None:
+            if userbot and userbot.poll() is not None:
                 print(f"{Colors.RED}💀 Userbot впав! Перезапуск через 3 сек...{Colors.RESET}")
                 time.sleep(3)
                 userbot = run_process(f"{python_exec} userbot.py", "Userbot", Colors.BLUE)

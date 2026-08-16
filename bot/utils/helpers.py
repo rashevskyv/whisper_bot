@@ -7,7 +7,7 @@ from bot.database.models import User, APIKey
 from bot.utils.security import key_manager
 from bot.ai.openai_provider import OpenAIProvider
 from bot.ai.google_provider import GoogleProvider
-from config import DEFAULT_SETTINGS
+from config import DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS # <--- ДОДАНО ІМПОРТ
 from telegram.constants import ParseMode
 
 logger = logging.getLogger(__name__)
@@ -15,17 +15,32 @@ logger = logging.getLogger(__name__)
 SYSTEM_OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 SYSTEM_GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 
-async def get_or_create_user(telegram_user) -> User:
+async def get_or_create_user(telegram_entity) -> User:
+    """
+    Створює або повертає запис в БД. 
+    telegram_entity може бути User (приват) або Chat (група).
+    """
+    entity_id = telegram_entity.id
+    is_group = entity_id < 0
+    
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.id == telegram_user.id))
+        result = await session.execute(select(User).where(User.id == entity_id))
         user = result.scalar_one_or_none()
+        
         if not user:
+            # Вибираємо правильні дефолтні налаштування
+            initial_settings = DEFAULT_GROUP_SETTINGS.copy() if is_group else DEFAULT_SETTINGS.copy()
+            
+            # Для груп name - це title, для юзерів - full_name/username
+            name = getattr(telegram_entity, 'title', None) or getattr(telegram_entity, 'full_name', 'Unknown')
+            username = getattr(telegram_entity, 'username', None)
+
             user = User(
-                id=telegram_user.id,
-                username=telegram_user.username,
-                full_name=telegram_user.full_name,
-                settings=DEFAULT_SETTINGS,
-                system_prompt=DEFAULT_SETTINGS['system_prompt']
+                id=entity_id,
+                username=username,
+                full_name=name,
+                settings=initial_settings,
+                system_prompt=initial_settings['system_prompt']
             )
             session.add(user)
             await session.commit()
@@ -95,9 +110,7 @@ async def send_long_message(target, text: str, reply_markup=None, parse_mode=Par
             else: await send_func(**kwargs)
 
 async def beautify_text(user_id: int, text: str) -> tuple[str, str]:
-    """
-    Повертає кортеж (відформатований_текст, назва_моделі).
-    """
+    """Повертає (текст, назва_моделі)."""
     if not text or len(text.strip()) < 2: return text, "None"
     
     provider = await get_ai_provider(user_id, for_transcription=False)
@@ -128,5 +141,5 @@ async def beautify_text(user_id: int, text: str) -> tuple[str, str]:
             result += chunk
         return (result.strip() if result else text), beautify_model
     except Exception as e:
-        logger.error(f"Beautify Error with {beautify_model}: {e}")
-        return text, f"Error ({beautify_model})"
+        logger.error(f"Beautify Error: {e}")
+        return text, "Error"

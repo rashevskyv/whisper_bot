@@ -24,8 +24,8 @@ from bot.handlers.settings import (
     language_menu, set_language_gui, 
     transcription_menu, set_transcription_model,
     timezone_menu, set_timezone_btn, ask_custom_timezone, save_custom_timezone,
-    toggle_debug,
-    WAITING_FOR_KEY, WAITING_FOR_CUSTOM_MODEL, WAITING_FOR_CUSTOM_PROMPT, WAITING_FOR_TIMEZONE
+    toggle_debug, ask_photo_prompt, process_photo_prompt, # <--- ДОДАНО: фото хендлери
+    WAITING_FOR_KEY, WAITING_FOR_CUSTOM_MODEL, WAITING_FOR_CUSTOM_PROMPT, WAITING_FOR_TIMEZONE, WAITING_FOR_PHOTO_PROMPT # <--- ДОДАНО: WAITING_FOR_PHOTO_PROMPT
 )
 from config import TOKEN
 
@@ -66,7 +66,7 @@ def main():
         .build()
     )
 
-    # --- Conversations ---
+    # --- Conversations (Налаштування) ---
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_for_key, pattern="^add_key_openai$")],
         states={WAITING_FOR_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_key)]},
@@ -99,6 +99,15 @@ def main():
     )
     app.add_handler(timezone_conv)
 
+    # Conversation для запиту до фото
+    photo_prompt_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(ask_photo_prompt, pattern="^ask_photo_prompt$")],
+        states={WAITING_FOR_PHOTO_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_photo_prompt)]},
+        fallbacks=[CommandHandler("cancel", cancel_conversation), CallbackQueryHandler(cancel_conversation, pattern="^cancel_conv$")],
+        per_message=False
+    )
+    app.add_handler(photo_prompt_conv)
+    
     app.add_handler(CommandHandler("start", start))
     
     # Callbacks
@@ -118,7 +127,6 @@ def main():
     app.add_handler(CallbackQueryHandler(set_timezone_btn, pattern="^set_tz_"))
     app.add_handler(CallbackQueryHandler(transcription_menu, pattern="^transcription_menu$"))
     app.add_handler(CallbackQueryHandler(set_transcription_model, pattern="^set_trans_"))
-    
     app.add_handler(CallbackQueryHandler(toggle_debug, pattern="^toggle_debug$"))
 
     # --- Handlers ---

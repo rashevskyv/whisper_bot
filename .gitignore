@@ -5,3 +5,6 @@
 __pycache__
 /.env
 /session_alex.session
+*.session
+*.db
+/graphify-out/
