@@ -99,6 +99,8 @@ async def download_file(telegram_file, file_id: str) -> str:
     file_ext = os.path.splitext(telegram_file.file_path)[1]
     if not file_ext:
         file_ext = ".temp"
+    elif file_ext.lower() == ".oga":
+        file_ext = ".ogg"
 
     file_path = os.path.join(TEMP_DIR, f"{file_id}{file_ext}")
     await telegram_file.download_to_drive(file_path)

@@ -1,3 +1,4 @@
+import os
 import base64
 import json
 import logging
@@ -227,8 +228,15 @@ class OpenAIProvider(LLMProvider):
             kwargs["extra_body"] = extra_body
 
         try:
+            filename = os.path.basename(audio_path)
+            base, ext = os.path.splitext(filename)
+            if ext.lower() in [".oga", ".opus"]:
+                filename = f"{base}.ogg"
+            elif ext.lower() not in [".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".wav", ".webm"]:
+                filename = f"{base}.ogg"
+
             with open(audio_path, "rb") as f:
-                kwargs["file"] = f
+                kwargs["file"] = (filename, f)
                 res = await self.client.audio.transcriptions.create(**kwargs)
             return res.text
         except Exception as e:

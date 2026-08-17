@@ -99,5 +99,37 @@ class TestMediaAndTranscription(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_openai_transcribe_oga_renamed_to_ogg(self):
+        """Verify OpenAIProvider transcribe converts .oga extension to .ogg in file tuple."""
+        provider = OpenAIProvider(api_key="test-key")
+        mock_create = AsyncMock(return_value=MagicMock(text="voice message transcription"))
+        provider.client.audio.transcriptions.create = mock_create
+
+        async def run_test():
+            with patch("builtins.open", MagicMock()):
+                res = await provider.transcribe("temp/voice_file_123.oga", language="uk")
+                self.assertEqual(res, "voice message transcription")
+                mock_create.assert_called_once()
+                call_kwargs = mock_create.call_args.kwargs
+                file_arg = call_kwargs.get("file")
+                self.assertIsInstance(file_arg, tuple)
+                self.assertEqual(file_arg[0], "voice_file_123.ogg")
+
+        asyncio.run(run_test())
+
+    def test_download_file_oga_mapped_to_ogg(self):
+        """Verify download_file converts .oga extension to .ogg."""
+        from bot.utils.media import download_file
+        mock_tg_file = MagicMock()
+        mock_tg_file.file_path = "voice/file_999.oga"
+        mock_tg_file.download_to_drive = AsyncMock()
+
+        async def run_test():
+            path = await download_file(mock_tg_file, "file_999")
+            self.assertTrue(path.endswith(".ogg"))
+            mock_tg_file.download_to_drive.assert_called_once_with(path)
+
+        asyncio.run(run_test())
+
 if __name__ == "__main__":
     unittest.main()
