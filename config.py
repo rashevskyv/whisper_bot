@@ -9,7 +9,7 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Kiev")
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.2.2"
 
 admin_ids_str = os.getenv("ADMIN_IDS", "")
 try:

@@ -38,17 +38,18 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
+logger = logging.getLogger("MainBot")
 
 async def post_init(application: Application):
     await init_db()
-    print("📦 [MainBot] DB initialized (WAL mode).")
+    logger.info("📦 [MainBot] DB initialized (WAL mode).")
     scheduler_service.start(application)
     await scheduler_service.restore_reminders()
-    print("⏰ [MainBot] Scheduler started.")
+    logger.info("⏰ [MainBot] Scheduler started.")
 
 def main():
     if not TOKEN:
-        print("❌ Помилка: Не задано BOT_TOKEN в .env!")
+        logger.error("❌ Помилка: Не задано BOT_TOKEN в .env!")
         return
 
     req = HTTPXRequest(
@@ -152,7 +153,7 @@ def main():
     # Generic Callback
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    print("✅ [MainBot] Started polling.")
+    logger.info("✅ [MainBot] Started polling.")
     app.run_polling()
 
 if __name__ == '__main__':

@@ -12,4 +12,5 @@
 - [x] Додати керування та очищення черги завдань Userbot (`DownloadQueue`): кнопка в налаштуваннях `queue_menu`, команди `/queue`, `/queue clear`.
 - [x] Реалізувати захист від FloodWait у `userbot.py` для запобігання перевантаженню Telegram API.
 - [x] Виправити помилку транскрибації голосових повідомлень Telegram (`Unsupported file format oga`): авто-конвертація розширення `.oga` -> `.ogg` для OpenAI API.
-- [x] Оновити граф знань Graphify, документацію `README.md` та покрити зміну тестами (`test_media_ffmpeg.py`).
+- [x] Вимкнути зайве отримання оновлень груп у Userbot (`no_updates=True`) для усунення помилки `Peer id invalid: -100...` та налаштувати негайний вивід логів (`PYTHONUNBUFFERED=1`).
+- [x] Оновити граф знань Graphify, документацію `README.md` та покрити зміну тестами.

@@ -36,4 +36,8 @@
 
 1. [x] Автоматично мапити розширення `.oga` на підтримуваний OpenAI формат `.ogg` у `download_file` та `OpenAIProvider.transcribe`.
 2. [x] Додати модульні тести в `test_media_ffmpeg.py` для перевірки обробки `.oga` файлів.
-3. [x] Перевірити роботу всіх 5 наборів тестів у паралельному режимі, оновити Graphify та реліз.
+
+## Фаза 7 — Стабілізація Userbot та негайне логування v2.2.2 (Завершено)
+
+1. [x] Встановити `no_updates=True` у Pyrogram Client для запобігання помилкам `ValueError: Peer id invalid` під час повідомлень у супергрупах.
+2. [x] Додати `export PYTHONUNBUFFERED=1` у `start.sh` та налаштувати стандартний логер у `bot_runner.py` для негайної синхронізації логів у systemd.

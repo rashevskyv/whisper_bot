@@ -1,4 +1,5 @@
 #!/bin/bash
+export PYTHONUNBUFFERED=1
 
 # Налаштування
 VENV_DIR="venv"

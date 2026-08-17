@@ -31,7 +31,7 @@ logger = logging.getLogger("Userbot")
 if os.path.exists("userbot.py"):
     os.chdir(os.path.dirname(os.path.abspath("userbot.py")))
 
-app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
+app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH, no_updates=True)
 
 def get_target_bot(link: str) -> str:
     """Визначає, кому відправити: SaveAsBot чи Monkettbot"""
