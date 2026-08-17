@@ -5,11 +5,12 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Kiev")
-APP_VERSION = "2.2.2"
+APP_VERSION = "2.3.0"
 
 admin_ids_str = os.getenv("ADMIN_IDS", "")
 try:
@@ -29,16 +30,21 @@ BOT_TRIGGERS = ["бот", "bot", "gpt", "валєра", "валєрчик", "в�
 
 # ЧАТ МОДЕЛІ
 AVAILABLE_MODELS = {
+    "openrouter": [
+        {"id": "openai/gpt-5.6-luna", "name": "🌙 GPT-5.6 Luna", "desc": "OpenAI ($0.10/M)"},
+        {"id": "deepseek/deepseek-v4-flash-0731", "name": "⚡ DeepSeek V4 Flash", "desc": "DeepSeek ($0.14/M)"},
+        {"id": "google/gemini-3.7-flash", "name": "✨ Gemini 3.7 Flash", "desc": "Google Thinking ($0.15/M)"},
+        {"id": "google/gemini-3.5-flash-lite", "name": "💫 Gemini 3.5 Lite", "desc": "Google Ultra-fast ($0.075/M)"},
+        {"id": "qwen/qwen3.7-flash", "name": "🌐 Qwen 3.7 Flash", "desc": "Alibaba 1M context ($0.03/M)"},
+        {"id": "mistralai/mistral-small-24b-instruct-2501", "name": "🌪 Mistral Small 3", "desc": "Mistral AI ($0.05/M)"}
+    ],
     "openai": {
         "common": ["gpt-4o-mini"],
         "advanced": ["gpt-4o", "gpt-4-turbo"]
     },
     "google": [
-        "gemini-3-pro-preview",
-        "gemini-2.5-pro",
-        "gemini-3-flash-preview",
         "gemini-2.5-flash",
-        "gemini-2.5-flash-8b"
+        "gemini-2.5-pro"
     ]
 }
 
@@ -119,7 +125,7 @@ DEFAULT_SETTINGS = {
     'summarize': True,
     'rewrite': True,
     'temperature': 0.7,
-    'model': 'gpt-4o-mini',
+    'model': 'openai/gpt-5.6-luna',
     'language': 'uk',
     'system_prompt': PERSONAS['assistant']['prompt'],
     'allow_search': True,
@@ -161,7 +167,7 @@ DEFAULT_SETTINGS = {
 
 # Налаштування за замовчуванням для ГРУП
 DEFAULT_GROUP_SETTINGS = {
-    'model': 'gpt-4o-mini',
+    'model': 'openai/gpt-5.6-luna',
     'temperature': 0.7,
     'language': 'uk',
     'system_prompt': PERSONAS['assistant']['prompt'],

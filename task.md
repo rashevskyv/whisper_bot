@@ -13,4 +13,6 @@
 - [x] Реалізувати захист від FloodWait у `userbot.py` для запобігання перевантаженню Telegram API.
 - [x] Виправити помилку транскрибації голосових повідомлень Telegram (`Unsupported file format oga`): авто-конвертація розширення `.oga` -> `.ogg` для OpenAI API.
 - [x] Вимкнути зайве отримання оновлень груп у Userbot (`no_updates=True`) для усунення помилки `Peer id invalid: -100...` та налаштувати негайний вивід логів (`PYTHONUNBUFFERED=1`).
-- [x] Оновити граф знань Graphify, документацію `README.md` та покрити зміну тестами.
+- [x] Інтегрувати провайдер **OpenRouter** (`OpenRouterProvider`) для розмовних моделей нового покоління (GPT-5.6 Luna, DeepSeek V4 Flash, Gemini 3.7 Flash, Gemini 3.5 Lite, Qwen 3.7 Flash, Mistral Small 3).
+- [x] Додати підтримку ключів OpenRouter у налаштуваннях (`keys_menu`, `save_key`) та оновити меню вибору моделей (`model_menu`).
+- [x] Покрити функціонал OpenRouter модульними тестами (`test_openrouter.py`), оновити документацію та граф знань Graphify.

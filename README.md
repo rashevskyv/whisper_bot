@@ -1,15 +1,21 @@
-# 🤖 AI Telegram Assistant (Multi-Provider: OpenAI & Gemini)
+# 🤖 AI Telegram Assistant (OpenRouter, OpenAI & Gemini)
 
-A powerful, multi-modal Telegram bot designed to be your ultimate personal assistant. It seamlessly integrates **OpenAI (GPT-4o)** and **Google (Gemini 1.5/2.0)** to process text, voice, video, and images.
+A powerful, multi-modal Telegram bot designed to be your ultimate personal assistant. It seamlessly integrates **OpenRouter** (for modern models like GPT-5.6 Luna, DeepSeek V4 Flash, Gemini 3.7 Flash, Qwen, Mistral), **OpenAI** (with dedicated `gpt-transcribe`), and **Google GenAI** to process text, voice, video, and images.
 
 The bot features **real-time web search**, smart summarization, context memory, and a robust settings system for customizing models and languages.
 
 ## ✨ Key Features
 
-### 🧠 Multi-LLM Support
-- **OpenAI:** GPT-4o, GPT-4o-mini, GPT-4-Turbo.
-- **Google Gemini:** Gemini 1.5 Pro, Gemini 2.0 Flash (Experimental).
-- **Flexible Access:** Users can provide their own API keys to unlock advanced models, or use the default system configuration (if allowed).
+### 🧠 Multi-LLM & OpenRouter Support
+- **OpenRouter Unified Hub:**
+  - 🌙 **OpenAI GPT-5.6 Luna** (`openai/gpt-5.6-luna`)
+  - ⚡ **DeepSeek V4 Flash** (`deepseek/deepseek-v4-flash-0731`)
+  - ✨ **Google Gemini 3.7 Flash** (`google/gemini-3.7-flash`)
+  - 💫 **Google Gemini 3.5 Flash Lite** (`google/gemini-3.5-flash-lite`)
+  - 🌐 **Qwen 3.7 Flash** (`qwen/qwen3.7-flash`)
+  - 🌪 **Mistral Small 3** (`mistralai/mistral-small-24b-instruct-2501`)
+- **Direct OpenAI & Gemini:** GPT-4o, GPT-4o-mini, Gemini 2.5 Flash / Pro.
+- **Flexible Access:** Users can provide their own API keys (`sk-or-v1-...`, `sk-...`, `AIza...`) to unlock models, or use the system configuration.
 
 ### 🌐 Live Web Search
 - **Internet Access:** The bot can browse the web via DuckDuckGo to find real-time information (news, weather, stock prices).

@@ -290,19 +290,40 @@ async def model_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current = obj.settings.get('model', DEFAULT_SETTINGS['model']) if obj else DEFAULT_SETTINGS['model']
 
     keyboard = []
-    for m in AVAILABLE_MODELS['openai']['common']:
-        keyboard.append([InlineKeyboardButton(f"✅ {m}" if current == m else m, callback_data=f"set_model_{m}")])
 
+    # 1. OpenRouter Сучасні Моделі
+    for m in AVAILABLE_MODELS.get('openrouter', []):
+        m_id = m['id']
+        m_name = m['name']
+        btn_label = f"✅ {m_name}" if current == m_id else m_name
+        keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"set_model_{m_id}")])
+
+    # 2. Прямий OpenAI (якщо є ключ або адмін)
     if bool(os.getenv("OPENAI_API_KEY")) or update.effective_user.id in ADMIN_IDS:
-        for m in AVAILABLE_MODELS['openai']['advanced']:
+        for m in AVAILABLE_MODELS.get('openai', {}).get('common', []):
+            keyboard.append([InlineKeyboardButton(f"✅ {m}" if current == m else m, callback_data=f"set_model_{m}")])
+        for m in AVAILABLE_MODELS.get('openai', {}).get('advanced', []):
             keyboard.append([InlineKeyboardButton(f"✅ {m}" if current == m else m, callback_data=f"set_model_{m}")])
 
+    # 3. Прямий Google (якщо є ключ або адмін)
     if bool(os.getenv("GOOGLE_API_KEY")) or update.effective_user.id in ADMIN_IDS:
-        for m in AVAILABLE_MODELS['google']:
+        for m in AVAILABLE_MODELS.get('google', []):
             keyboard.append([InlineKeyboardButton(f"✅ {m}" if current == m else m, callback_data=f"set_model_{m}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
-    try: await query.edit_message_text(f"🤖 Модель чату: {current}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    
+    current_label = current
+    for m in AVAILABLE_MODELS.get('openrouter', []):
+        if m['id'] == current:
+            current_label = m['name']
+            break
+
+    try:
+        await query.edit_message_text(
+            f"🤖 <b>Модель чату:</b> <code>{current_label}</code>\n\nОберіть модель для генерації відповідей:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
     except BadRequest: pass
 
 async def set_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -389,10 +410,19 @@ async def keys_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     async with AsyncSessionLocal() as session:
         keys = (await session.execute(select(APIKey).where(APIKey.user_id==user_id, APIKey.is_active==True))).scalars().all()
+    has_or = any(k.provider=='openrouter' for k in keys)
     has_o = any(k.provider=='openai' for k in keys)
     has_g = any(k.provider=='google' for k in keys)
-    txt = "<b>🔑 Ключі API</b>\n\nТут ви можете додати свої ключі для зняття обмежень."
+    
+    txt = (
+        "<b>🔑 Ключі API</b>\n\n"
+        "Тут ви можете додати свої персональні ключі:\n"
+        "• <b>OpenRouter</b> (універсальний ключ для GPT-5.6 Luna, DeepSeek V4, Gemini 3.7, Qwen, Mistral)\n"
+        "• <b>OpenAI</b> (для прямого API та транскрибації)\n"
+        "• <b>Google GenAI</b> (для прямого Gemini)"
+    )
     kb = []
+    if has_or: kb.append([InlineKeyboardButton("❌ Видалити OpenRouter Key", callback_data="del_key_openrouter")])
     if has_o: kb.append([InlineKeyboardButton("❌ Видалити OpenAI Key", callback_data="del_key_openai")])
     if has_g: kb.append([InlineKeyboardButton("❌ Видалити Google Key", callback_data="del_key_google")])
     kb.append([InlineKeyboardButton("➕ Додати ключ", callback_data="add_key_openai"), InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
@@ -401,7 +431,14 @@ async def keys_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ask_for_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
-    await query.edit_message_text("Надішліть ключ:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Скасувати", callback_data="cancel_conv")]]))
+    await query.edit_message_text(
+        "Надішліть ваш API ключ:\n\n"
+        "• <code>sk-or-v1-...</code> — OpenRouter\n"
+        "• <code>sk-...</code> — OpenAI\n"
+        "• <code>AIza...</code> — Google Gemini",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Скасувати", callback_data="cancel_conv")]]),
+        parse_mode='HTML'
+    )
     return WAITING_FOR_KEY
 
 async def save_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -409,8 +446,20 @@ async def save_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key_text = update.message.text.strip()
     try: await update.message.delete()
     except: pass
-    provider = "openai" if key_text.startswith("sk-") else "google" if key_text.startswith("AIza") else None
-    if not provider: return WAITING_FOR_KEY
+    
+    if key_text.startswith(("sk-or-v1-", "sk-or-")):
+        provider = "openrouter"
+    elif key_text.startswith("sk-"):
+        provider = "openai"
+    elif key_text.startswith("AIza"):
+        provider = "google"
+    else:
+        provider = "openrouter" if len(key_text) > 25 else None
+        
+    if not provider:
+        await update.message.reply_text("❌ Нерозпізнаний формат ключа. Спробуйте ще раз або скасуйте.")
+        return WAITING_FOR_KEY
+        
     encrypted = key_manager.encrypt(key_text)
     async with AsyncSessionLocal() as session:
         user = await session.get(User, user_id)
@@ -422,7 +471,7 @@ async def save_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for k in old_keys.scalars().all(): await session.delete(k)
         session.add(APIKey(user_id=user_id, provider=provider, encrypted_key=encrypted, is_active=True))
         await session.commit()
-    await update.message.reply_text(f"✅ Ключ збережено!")
+    await update.message.reply_text(f"✅ Ключ <b>{provider.upper()}</b> успішно збережено!", parse_mode='HTML')
     return ConversationHandler.END
 
 async def delete_key(update: Update, context: ContextTypes.DEFAULT_TYPE):

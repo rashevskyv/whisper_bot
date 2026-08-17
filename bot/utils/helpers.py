@@ -7,12 +7,14 @@ from bot.database.models import User, APIKey
 from bot.utils.security import key_manager
 from bot.ai.openai_provider import OpenAIProvider
 from bot.ai.google_provider import GoogleProvider
-from config import DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS # <--- ДОДАНО ІМПОРТ
+from bot.ai.openrouter_provider import OpenRouterProvider
+from config import DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS, OPENROUTER_API_KEY # <--- ДОДАНО ІМПОРТ
 from telegram.constants import ParseMode
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+SYSTEM_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 SYSTEM_GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 
 async def get_or_create_user(telegram_entity) -> User:
@@ -61,18 +63,43 @@ async def get_ai_provider(user_id: int, for_transcription: bool = False):
                 return None
             return OpenAIProvider(api_key=api_key)
         else:
-            model = user.settings.get('model', 'gpt-4o-mini') if user and user.settings else 'gpt-4o-mini'
-            provider_type = 'google' if 'gemini' in model.lower() else 'openai'
-            result = await session.execute(
-                select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider_type, APIKey.is_active == True)
-            )
-            user_key_obj = result.scalar_one_or_none()
-
-            api_key = key_manager.decrypt(user_key_obj.encrypted_key) if user_key_obj else (SYSTEM_GOOGLE_KEY if provider_type == 'google' else SYSTEM_OPENAI_KEY)
-            if not api_key:
-                return None
-
-            return GoogleProvider(api_key=api_key, model_name=model) if provider_type == 'google' else OpenAIProvider(api_key=api_key)
+            model = user.settings.get('model', 'openai/gpt-5.6-luna') if user and user.settings else 'openai/gpt-5.6-luna'
+            
+            # 1. OpenRouter моделі (містять '/')
+            if '/' in model or model.startswith(('deepseek', 'qwen', 'mistral', 'openai/', 'google/')):
+                provider_type = 'openrouter'
+                result = await session.execute(
+                    select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider_type, APIKey.is_active == True)
+                )
+                user_key_obj = result.scalar_one_or_none()
+                api_key = key_manager.decrypt(user_key_obj.encrypted_key) if user_key_obj else SYSTEM_OPENROUTER_KEY
+                if not api_key:
+                    return None
+                return OpenRouterProvider(api_key=api_key, model_name=model)
+            
+            # 2. Прямий Google Gemini (якщо без префіксу google/)
+            elif 'gemini' in model.lower():
+                provider_type = 'google'
+                result = await session.execute(
+                    select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider_type, APIKey.is_active == True)
+                )
+                user_key_obj = result.scalar_one_or_none()
+                api_key = key_manager.decrypt(user_key_obj.encrypted_key) if user_key_obj else SYSTEM_GOOGLE_KEY
+                if not api_key:
+                    return None
+                return GoogleProvider(api_key=api_key, model_name=model)
+            
+            # 3. Прямий OpenAI
+            else:
+                provider_type = 'openai'
+                result = await session.execute(
+                    select(APIKey).where(APIKey.user_id == user_id, APIKey.provider == provider_type, APIKey.is_active == True)
+                )
+                user_key_obj = result.scalar_one_or_none()
+                api_key = key_manager.decrypt(user_key_obj.encrypted_key) if user_key_obj else SYSTEM_OPENAI_KEY
+                if not api_key:
+                    return None
+                return OpenAIProvider(api_key=api_key)
 
 def clean_html(text: str) -> str:
     if not text: return ""

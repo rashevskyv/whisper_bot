@@ -41,3 +41,10 @@
 
 1. [x] Встановити `no_updates=True` у Pyrogram Client для запобігання помилкам `ValueError: Peer id invalid` під час повідомлень у супергрупах.
 2. [x] Додати `export PYTHONUNBUFFERED=1` у `start.sh` та налаштувати стандартний логер у `bot_runner.py` для негайної синхронізації логів у systemd.
+
+## Фаза 8 — Інтеграція OpenRouter та сучасних моделей v2.3.0 (Завершено)
+
+1. [x] Створити `OpenRouterProvider` (`bot/ai/openrouter_provider.py`) з підтримкою моделей OpenRouter (GPT-5.6 Luna, DeepSeek V4 Flash, Gemini 3.7 Flash, Gemini 3.5 Lite, Qwen 3.7 Flash, Mistral Small 3).
+2. [x] Додати підтримку ключів `OPENROUTER_API_KEY` (`sk-or-...`) у базі даних та файлі `.env`.
+3. [x] Оновити інтерфейс меню вибору моделі `model_menu` та меню керування ключами `keys_menu`.
+4. [x] Написати тести `test_openrouter.py`, провести паралельну валідацію всіх 6 наборів тестів, оновити граф знань Graphify.
