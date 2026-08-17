@@ -46,6 +46,12 @@ The bot features **real-time web search**, smart summarization, context memory, 
     - **Silent Transcription:** Automatically transcribes voice notes in groups without notifying everyone.
 - **Personas:** Switch between different personalities: "Assistant", "Friend", "Editor", "Psychologist", "Coder".
 
+### 📥 Userbot & Download Queue Management
+- **Media Download Queue:** Manages background download tasks for TikTok, Instagram Reels, Twitter/X, and 9GAG media.
+- **Queue Control UI:** Inspect pending, processing, completed, and error tasks from the interactive settings menu or via `/queue`.
+- **One-Click Flush:** Cancel stuck or pending downloads using the "Clear Pending" button or `/queue clear`.
+- **FloodWait Protection:** Userbot automatically detects and respects Telegram rate limits, pausing safely without failing tasks.
+
 ### ⚙️ Settings & Security
 - **Unified Menu:** Access settings via the `/start` command or by typing "menu"/"settings".
 - **Language Switching:** Change the bot's language (UK/EN/RU) on the fly.

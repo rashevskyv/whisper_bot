@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from pyrogram import Client, filters
+from pyrogram.errors import FloodWait
 from sqlalchemy.future import select
 from bot.database.session import AsyncSessionLocal
 from bot.database.models import DownloadQueue
@@ -155,11 +156,34 @@ async def process_queue():
                             await session.commit()
                             logger.info(f"💾 [Userbot] Task {task.id} FINAL status: {current_task.status}")
 
-                except Exception as e:
-                    logger.error(f"❌ [Userbot] CRITICAL TASK ERROR: {e}")
+                except FloodWait as fw:
+                    wait_time = int(fw.value) if hasattr(fw, 'value') else 10
+                    logger.warning(f"⚠️ [Userbot] Telegram FloodWait: {wait_time}s required. Pausing queue...")
                     async with AsyncSessionLocal() as session:
                         t = await session.get(DownloadQueue, task.id)
-                        if t: t.status = "error"; await session.commit()
+                        if t:
+                            t.status = "pending"
+                            await session.commit()
+                    await asyncio.sleep(wait_time + 1)
+
+                except Exception as e:
+                    err_str = str(e)
+                    if "FLOOD_WAIT" in err_str or "wait of " in err_str.lower():
+                        import re
+                        m = re.search(r"FLOOD_WAIT_?(\d+)", err_str) or re.search(r"wait of (\d+) seconds", err_str, re.IGNORECASE)
+                        wait_s = int(m.group(1)) if m else 10
+                        logger.warning(f"⚠️ [Userbot] Detected FloodWait {wait_s}s in generic error. Pausing queue...")
+                        async with AsyncSessionLocal() as session:
+                            t = await session.get(DownloadQueue, task.id)
+                            if t:
+                                t.status = "pending"
+                                await session.commit()
+                        await asyncio.sleep(wait_s + 1)
+                    else:
+                        logger.error(f"❌ [Userbot] CRITICAL TASK ERROR: {e}")
+                        async with AsyncSessionLocal() as session:
+                            t = await session.get(DownloadQueue, task.id)
+                            if t: t.status = "error"; await session.commit()
             else:
                 await asyncio.sleep(2)
 

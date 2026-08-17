@@ -1,28 +1,34 @@
-# Assistant improvement release plan
+# План покращення та підтримки асистента
 
-## Phase 1 — reliable media transcription (Completed)
+## Фаза 1 — Надійна транскрибація медіа (Завершено)
 
-1. [x] Make `gpt-transcribe` the fixed OpenAI transcription model; remove the user-facing transcription-model selector.
-2. [x] Pass its `languages` hint correctly and allow a short transcription prompt plus optional keywords from chat settings.
-3. [x] Resolve FFmpeg from the installed bundled binary when it is not on `PATH`; convert video notes and video files to mono, speech-appropriate audio.
-4. [x] Check the generated audio size against OpenAI's 25 MB limit and retry once with a lower bitrate; report a concise user-facing failure if still oversized.
-5. [x] Raise and handle transcription failures so they never enter the text-beautification path.
+1. [x] Встановити `gpt-transcribe` як фіксовану модель транскрибації OpenAI; прибрати вибір моделі транскрибації з налаштувань.
+2. [x] Передавати підказки мов (`languages`), короткий промпт та опціональні ключові слова з налаштувань чату.
+3. [x] Знаходити FFmpeg у системному `PATH` або використовувати вбудований бінарник `imageio-ffmpeg`; конвертувати відео та кружечки у моно MP3.
+4. [x] Перевіряти розмір файлу аудіо перед відправкою (до 25 МБ) та повторювати зі зниженим бітрейтом за потреби.
+5. [x] Генерувати виключення при помилках транскрибації, щоб вони не потрапляли в модуль форматування тексту.
 
-## Phase 2 — useful, bounded context (Completed)
+## Фаза 2 — Керований контекст та пам'ять (Завершено)
 
-1. [x] Add a group context mode (shared or per-user) and a retention period with cleanup.
-2. [x] Add explicit `/remember`, `/forget`, and `/memories` behavior backed by the existing SQLite database.
-3. [x] Put saved facts into the system context with a small cap; do not add a vector database.
+1. [x] Додати режими контексту для груп (`shared` / `personal`) та автоматичне очищення повідомлень (30 днів).
+2. [x] Реалізувати явні команди `/remember`, `/forget` та `/memories` на базі SQLite.
+3. [x] Передавати збережені факти в системний контекст з лімітом та захистом від ін'єкцій.
 
-## Phase 3 — answer quality and operational limits (Completed)
+## Фаза 3 — Якість відповідей та ліміти використання (Завершено)
 
-1. [x] Keep web-search links as sources in the final answer.
-2. [x] Add simple per-user daily media/transcription limits using existing SQLite state.
-3. [x] Document settings and run the relevant checks.
+1. [x] Зберігати посилання на джерела веб-пошуку та додавати клікабельний блок `<b>Джерела:</b>` до відповіді.
+2. [x] Додати добовий ліміт транскрибації (60 хв/добу UTC) на базі SQLite.
+3. [x] Документувати налаштування та покрити функціонал тестами.
 
-## Verification and delivery
+## Фаза 4 — Сумісність залежностей та консистентність моделей v2.1.1 (Завершено)
 
-1. [x] Inspect every changed caller and review the diff.
-2. [x] Run the smallest relevant Python checks and available test suite.
-3. There is no existing application-version convention, so do not invent one.
-4. [x] Update this plan and task checklist, commit focused changes, push, and confirm a clean tree.
+1. [x] Оновити вимогу до `aiohttp>=3.10.0` у `requirements.txt` для усунення помилки `AttributeError: module aiohttp has no attribute SocketTimeoutError`.
+2. [x] Забезпечити використання `gpt-4o-mini` за замовчуванням для відповідей та аналізу зображень, прибравши примусове перемикання на `gpt-4o` при нагадуваннях.
+
+## Фаза 5 — Керування чергою завантажень Userbot та захист від FloodWait v2.2.0 (Завершено)
+
+1. [x] Реалізувати модуль `bot/utils/queue_manager.py` з функціями `get_queue_stats`, `clear_pending_tasks`, `clear_all_tasks`.
+2. [x] Додати кнопку «📥 Черга завдань» у меню налаштувань (`settings_menu` -> `queue_menu`) з відображенням статистики та кнопками скидання черги.
+3. [x] Додати команду `/queue` та `/queue clear` для швидкого перегляду та очищення черги.
+4. [x] Додати коректне очікування та відновлення статусу завдань при виникненні Telegram `FloodWait` у `userbot.py`.
+5. [x] Написати тести `test_queue.py`, провести паралельну верифікацію та оновити документацію.

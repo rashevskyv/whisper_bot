@@ -10,6 +10,7 @@ from bot.database.models import User, APIKey
 from bot.utils.helpers import get_or_create_user
 from bot.utils.security import key_manager
 from bot.utils.context import context_manager
+from bot.utils.queue_manager import get_queue_stats, clear_pending_tasks, clear_all_tasks
 from config import PERSONAS, DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS, ADMIN_IDS, AVAILABLE_MODELS
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,12 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_bot_admin:
         keyboard.append([
-            InlineKeyboardButton(f"{debug_icon} Режим налагодження", callback_data="toggle_debug")
+            InlineKeyboardButton(f"{debug_icon} Режим налагодження", callback_data="toggle_debug"),
+            InlineKeyboardButton("📥 Черга завдань", callback_data="queue_menu")
+        ])
+    elif update.effective_chat.type == 'private':
+        keyboard.append([
+            InlineKeyboardButton("📥 Черга завдань", callback_data="queue_menu")
         ])
 
     keyboard.append([InlineKeyboardButton("🗑 Очистити контекст", callback_data="reset_context")])
@@ -130,6 +136,65 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
     except BadRequest: pass
+
+async def queue_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not await check_group_admin(update, context): return
+    if query:
+        await query.answer()
+
+    stats = await get_queue_stats()
+    pending = stats["pending"]
+    processing = stats["processing"]
+    done = stats["done"]
+    error = stats["error"]
+    total = stats["total"]
+
+    msg_text = (
+        f"📥 <b>Черга завантажень (Userbot):</b>\n\n"
+        f"• ⏳ Очікують (pending): <b>{pending}</b>\n"
+        f"• ⚙️ В обробці (processing): <b>{processing}</b>\n"
+        f"• ✅ Виконано (done): <b>{done}</b>\n"
+        f"• ❌ Помилки / Timeout: <b>{error}</b>\n"
+        f"• 📊 Всього записів: <b>{total}</b>\n"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton(f"🗑 Очистити очікуючі ({pending})", callback_data="queue_clear_pending")],
+        [InlineKeyboardButton("💥 Очистити ВСІ завдання", callback_data="queue_clear_all")],
+        [
+            InlineKeyboardButton("🔄 Оновити", callback_data="queue_menu"),
+            InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")
+        ]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if query:
+        try:
+            await query.edit_message_text(msg_text, reply_markup=reply_markup, parse_mode='HTML')
+        except BadRequest:
+            pass
+    elif update.effective_message:
+        await update.effective_message.reply_text(msg_text, reply_markup=reply_markup, parse_mode='HTML')
+
+async def queue_clear_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not await check_group_admin(update, context): return
+
+    deleted_count = await clear_pending_tasks()
+    if query:
+        await query.answer(f"Очищено {deleted_count} очікуючих завдань!", show_alert=True)
+    await queue_menu(update, context)
+
+async def queue_clear_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not await check_group_admin(update, context): return
+
+    deleted_count = await clear_all_tasks()
+    if query:
+        await query.answer(f"Повністю очищено чергу ({deleted_count} записів)!", show_alert=True)
+    await queue_menu(update, context)
 
 async def toggle_context_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query

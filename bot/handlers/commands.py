@@ -1,15 +1,17 @@
 import html
 import logging
 from typing import Optional, List, Tuple
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from sqlalchemy.future import select
 from sqlalchemy import desc, and_
 from bot.database.session import AsyncSessionLocal
 from bot.database.models import User, UserMemory
 from bot.utils.helpers import get_or_create_user
-from bot.handlers.settings import get_main_menu_keyboard
+from bot.handlers.settings import get_main_menu_keyboard, check_group_admin
 from bot.utils.scheduler import scheduler_service
+from bot.utils.queue_manager import get_queue_stats, clear_pending_tasks, clear_all_tasks
+from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -274,5 +276,64 @@ async def terms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     terms_str = ", ".join(f"<code>{html.escape(t)}</code>" for t in terms)
     await update.message.reply_text(
         f"✅ <b>Словник термінів оновлено ({len(terms)}):</b>\n{terms_str}",
+        parse_mode='HTML'
+    )
+
+async def queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /queue або /queue clear для керування чергою завдань Userbot.
+    """
+    chat = update.effective_chat
+    user = update.effective_user
+
+    # Перевірка прав (адмін групи або приватний чат / bot admin)
+    if chat.type != 'private' and not await check_group_admin(update, context):
+        return
+
+    args = context.args or []
+    if args and args[0].lower() in ["clear", "reset", "flush"]:
+        deleted = await clear_pending_tasks()
+        await update.message.reply_text(
+            f"🗑 <b>Чергу очищено!</b>\nВидалено очікуючих завдань: <b>{deleted}</b>",
+            parse_mode='HTML'
+        )
+        return
+
+    if args and args[0].lower() in ["clear_all", "purge"]:
+        deleted = await clear_all_tasks()
+        await update.message.reply_text(
+            f"💥 <b>Чергу повністю очищено!</b>\nВидалено всіх записів: <b>{deleted}</b>",
+            parse_mode='HTML'
+        )
+        return
+
+    stats = await get_queue_stats()
+    pending = stats["pending"]
+    processing = stats["processing"]
+    done = stats["done"]
+    error = stats["error"]
+    total = stats["total"]
+
+    msg_text = (
+        f"📥 <b>Черга завантажень (Userbot):</b>\n\n"
+        f"• ⏳ Очікують (pending): <b>{pending}</b>\n"
+        f"• ⚙️ В обробці (processing): <b>{processing}</b>\n"
+        f"• ✅ Виконано (done): <b>{done}</b>\n"
+        f"• ❌ Помилки / Timeout: <b>{error}</b>\n"
+        f"• 📊 Всього записів: <b>{total}</b>\n"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton(f"🗑 Очистити очікуючі ({pending})", callback_data="queue_clear_pending")],
+        [InlineKeyboardButton("💥 Очистити ВСІ завдання", callback_data="queue_clear_all")],
+        [
+            InlineKeyboardButton("🔄 Оновити", callback_data="queue_menu"),
+            InlineKeyboardButton("🔙 Закрити", callback_data="close_menu")
+        ]
+    ]
+
+    await update.message.reply_text(
+        msg_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='HTML'
     )

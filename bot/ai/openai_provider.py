@@ -83,10 +83,6 @@ class OpenAIProvider(LLMProvider):
         user_id = settings.get('user_id')
         disable_tools = settings.get('disable_tools', False) # ПРАПОРЕЦЬ
 
-        # Upgrade model logic (only if tools are enabled)
-        if not disable_tools and any("нагадай" in m.get('content', '').lower() for m in messages[-2:]):
-             model = 'gpt-4o'
-
         try: tz = zoneinfo.ZoneInfo(user_tz_name)
         except: tz = zoneinfo.ZoneInfo("UTC")
 
@@ -240,11 +236,14 @@ class OpenAIProvider(LLMProvider):
             raise
 
     async def analyze_image(self, image_path: str, prompt: str, messages: List[Dict[str, str]] = None, settings: Dict[str, Any] = None) -> AsyncGenerator[str, None]:
+        model = (settings or {}).get('model', 'gpt-4o-mini')
+        if model not in ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo']:
+            model = 'gpt-4o-mini'
         try:
             with open(image_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode('utf-8')
             msg = [{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}]
-            stream = await self.client.chat.completions.create(model="gpt-4o", messages=msg, max_tokens=1000, stream=True)
+            stream = await self.client.chat.completions.create(model=model, messages=msg, max_tokens=1000, stream=True)
             async for chunk in stream:
                 if chunk.choices[0].delta.content: yield chunk.choices[0].delta.content
         except Exception as e: yield f"⚠️ Error: {e}"

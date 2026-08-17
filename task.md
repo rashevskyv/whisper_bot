@@ -1,10 +1,14 @@
-# Assistant improvement release
+# Завдання розробки асистента
 
-- [x] Use `gpt-transcribe` as the only OpenAI transcription model.
-- [x] Restore transcription for Telegram voice, video notes, and video files when FFmpeg is absent from `PATH`.
-- [x] Keep extracted audio within OpenAI's 25 MB upload limit.
-- [x] Give users a clear transcription failure instead of processing an error string as text.
-- [x] Add useful transcription context (language hints and optional chat glossary).
-- [x] Add controllable context retention, group privacy mode, and explicit user memory.
-- [x] Preserve web-search source links in answers and apply simple usage limits.
-- [x] Verify, review, document, commit, and push the finished release.
+- [x] Використовувати `gpt-transcribe` як єдину модель транскрибації OpenAI.
+- [x] Відновити транскрибацію для голосових повідомлень, відеонотаток (кружечків) та відеофайлів без обов'язкового системного FFmpeg у `PATH`.
+- [x] Забезпечити обмеження видобутого аудіо в межах 25 МБ для OpenAI API.
+- [x] Повертати користувачам чітке повідомлення про помилку транскрибації замість передачі тексту помилки на обробку.
+- [x] Додати контекстні підказки мови та словник специфічних термінів (`/terms`).
+- [x] Додати кероване утримання контексту (30 днів), режими приватності груп та явну пам'ять користувача (`/remember`, `/memories`, `/forget`).
+- [x] Гарантувати додавання посилань на джерела після веб-пошуку та застосувати добовий ліміт транскрибації.
+- [x] Виправити несумісність версій `aiohttp` та `openai` (`SocketTimeoutError` в `requirements.txt`).
+- [x] Зафіксувати відповіді моделі на `gpt-4o-mini` без небажаного автоматичного перемикання на `gpt-4o`.
+- [x] Додати керування та очищення черги завдань Userbot (`DownloadQueue`): кнопка в налаштуваннях `queue_menu`, команди `/queue`, `/queue clear`.
+- [x] Реалізувати захист від FloodWait у `userbot.py` для запобігання перевантаженню Telegram API.
+- [x] Оновити граф знань Graphify, документацію `README.md` та покрити чергу модульними тестами (`test_queue.py`).
