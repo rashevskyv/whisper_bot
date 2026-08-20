@@ -37,6 +37,7 @@ async def get_user_model_settings(user_id: int):
         # Fallbacks
         if 'language' not in settings: settings['language'] = default['language']
         if 'trigger_mode' not in settings: settings['trigger_mode'] = default.get('trigger_mode', 'keywords')
+        if 'video_repost' not in settings: settings['video_repost'] = default.get('video_repost', True)
 
         return settings
 

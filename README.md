@@ -58,6 +58,11 @@ The bot features **real-time web search**, smart summarization, context memory, 
 - **One-Click Flush:** Cancel stuck or pending downloads using the "Clear Pending" button or `/queue clear`.
 - **FloodWait Protection:** Userbot automatically detects and respects Telegram rate limits, pausing safely without failing tasks.
 
+### 🎥 Video Repost & Media Download Controls
+- **Toggle Video Reposting:** Easily turn automatic video download & reposting on or off per-chat from the interactive settings menu button (`🎥 Репост відео: ✅/❌`) or via `/video on` / `/video off`.
+- **Group-Wide Default:** Globally enable or disable automatic video reposting for all groups using the `.env` configuration `ENABLE_VIDEO_REPOST_GROUPS=false` (or `ENABLE_VIDEO_REPOST=false` for personal chats).
+- **Bulk Administrator Command:** Bot administrators (`ADMIN_IDS`) can turn off or on video reposting for all registered groups at once with `/video all off` or `/video all on`.
+
 ### ⚙️ Settings & Security
 - **Unified Menu:** Access settings via the `/start` command or by typing "menu"/"settings".
 - **Language Switching:** Change the bot's language (UK/EN/RU) on the fly.
@@ -110,8 +115,13 @@ We use a helper script `start.sh` that handles virtual environment creation and 
     MAIN_BOT_USERNAME=NameOfYourBot
 
     # System API Keys (Optional fallbacks)
+    OPENROUTER_API_KEY=sk-or-v1-...
     OPENAI_API_KEY=sk-...
     GOOGLE_API_KEY=AIza...
+
+    # Video Reposting Options (Optional)
+    ENABLE_VIDEO_REPOST=true
+    ENABLE_VIDEO_REPOST_GROUPS=true
 
     # Encryption Key for Database
     # Run: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

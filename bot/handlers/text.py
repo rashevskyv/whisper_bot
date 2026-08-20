@@ -215,43 +215,51 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 3. Userbot (TikTok/Insta)
     userbot_match = USERBOT_REGEX.search(text)
     if userbot_match:
-        link = userbot_match.group(0)
-        logger.info(f"🔗 {user_log} Userbot Link: {link}")
-        try:
-            async with AsyncSessionLocal() as session:
-                queue_item = DownloadQueue(user_id=chat_id, message_id=update.message.message_id, link=link, status="pending")
-                session.add(queue_item)
-                await session.commit()
-                logger.info(f"💾 {user_log} Task Saved (ID: {queue_item.id})")
-            if is_private: await update.message.reply_text(f"🔗 Передав юзерботу...", quote=True)
-        except Exception as db_err:
-            logger.error(f"❌ {user_log} DB Error: {db_err}")
-            if is_private: await update.message.reply_text(f"❌ Помилка БД.", quote=True)
-        return
+        chat_settings = await get_user_model_settings(chat_id)
+        if chat_settings.get('video_repost', True):
+            link = userbot_match.group(0)
+            logger.info(f"🔗 {user_log} Userbot Link: {link}")
+            try:
+                async with AsyncSessionLocal() as session:
+                    queue_item = DownloadQueue(user_id=chat_id, message_id=update.message.message_id, link=link, status="pending")
+                    session.add(queue_item)
+                    await session.commit()
+                    logger.info(f"💾 {user_log} Task Saved (ID: {queue_item.id})")
+                if is_private: await update.message.reply_text(f"🔗 Передав юзерботу...", quote=True)
+            except Exception as db_err:
+                logger.error(f"❌ {user_log} DB Error: {db_err}")
+                if is_private: await update.message.reply_text(f"❌ Помилка БД.", quote=True)
+            return
+        else:
+            logger.info(f"⏭️ {user_log} Video Repost disabled for chat {chat_id}. Skipping Userbot download.")
 
     # 4. Direct DL
     direct_match = DIRECT_REGEX.search(text)
     if direct_match:
-        url = direct_match.group(0)
-        logger.info(f"🔗 {user_log} Direct DL Link: {url}")
-        status_msg = await update.message.reply_text("⏳ Завантажую...", quote=True) if is_private else None
-        try:
-            media_info = await download_media_direct(url)
-            if media_info and os.path.exists(media_info['path']):
-                logger.info(f"✅ {user_log} Download OK. Sending...")
-                if status_msg: await status_msg.edit_text("📤 Відправляю...")
-                if media_info['type'] == 'video':
-                    await update.message.reply_video(video=open(media_info['path'], 'rb'), reply_to_message_id=update.message.message_id)
+        chat_settings = await get_user_model_settings(chat_id)
+        if chat_settings.get('video_repost', True):
+            url = direct_match.group(0)
+            logger.info(f"🔗 {user_log} Direct DL Link: {url}")
+            status_msg = await update.message.reply_text("⏳ Завантажую...", quote=True) if is_private else None
+            try:
+                media_info = await download_media_direct(url)
+                if media_info and os.path.exists(media_info['path']):
+                    logger.info(f"✅ {user_log} Download OK. Sending...")
+                    if status_msg: await status_msg.edit_text("📤 Відправляю...")
+                    if media_info['type'] == 'video':
+                        await update.message.reply_video(video=open(media_info['path'], 'rb'), reply_to_message_id=update.message.message_id)
+                    else:
+                        await update.message.reply_document(document=open(media_info['path'], 'rb'), reply_to_message_id=update.message.message_id)
+                    if status_msg: await status_msg.delete()
+                    os.remove(media_info['path'])
                 else:
-                    await update.message.reply_document(document=open(media_info['path'], 'rb'), reply_to_message_id=update.message.message_id)
-                if status_msg: await status_msg.delete()
-                os.remove(media_info['path'])
-            else:
-                if status_msg: await status_msg.edit_text("❌ Не вдалося.")
-        except Exception as e:
-            logger.error(f"❌ {user_log} DL Error: {e}")
-            if status_msg: await status_msg.edit_text("❌ Помилка.")
-        return
+                    if status_msg: await status_msg.edit_text("❌ Не вдалося.")
+            except Exception as e:
+                logger.error(f"❌ {user_log} DL Error: {e}")
+                if status_msg: await status_msg.edit_text("❌ Помилка.")
+            return
+        else:
+            logger.info(f"⏭️ {user_log} Video Repost disabled for chat {chat_id}. Skipping Direct DL.")
 
     # 5. AI
     if should_respond(update, context):

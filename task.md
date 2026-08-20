@@ -16,3 +16,7 @@
 - [x] Інтегрувати провайдер **OpenRouter** (`OpenRouterProvider`) для розмовних моделей нового покоління (GPT-5.6 Luna, DeepSeek V4 Flash, Gemini 3.7 Flash, Gemini 3.5 Lite, Qwen 3.7 Flash, Mistral Small 3).
 - [x] Додати підтримку ключів OpenRouter у налаштуваннях (`keys_menu`, `save_key`) та оновити меню вибору моделей (`model_menu`).
 - [x] Покрити функціонал OpenRouter модульними тестами (`test_openrouter.py`), оновити документацію та граф знань Graphify.
+- [x] Додати налаштування вимкнення автоматичного репосту відео (`video_repost`) для окремих чатів та за замовчуванням для груп (`ENABLE_VIDEO_REPOST_GROUPS` у `config.py`).
+- [x] Додати кнопку перемикання «🎥 Репост відео: ✅/❌» у меню налаштувань `settings_menu` (`toggle_video_repost`).
+- [x] Реалізувати команду `/video` (`/video on`, `/video off`, `/video status`, `/video all off` для адміністраторів бота).
+- [x] Покрити функціонал перемикання репосту відео модульними тестами (`test_video_repost.py`).

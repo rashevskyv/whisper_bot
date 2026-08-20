@@ -11,7 +11,7 @@ from bot.utils.helpers import get_or_create_user
 from bot.handlers.settings import get_main_menu_keyboard, check_group_admin
 from bot.utils.scheduler import scheduler_service
 from bot.utils.queue_manager import get_queue_stats, clear_pending_tasks, clear_all_tasks
-from config import ADMIN_IDS
+from config import ADMIN_IDS, DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS
 
 logger = logging.getLogger(__name__)
 
@@ -334,6 +334,120 @@ async def queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         msg_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='HTML'
+    )
+
+async def video_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /video для керування автоматичним репостом відео.
+    Використання:
+      /video — показати поточний статус та кнопку перемикання
+      /video on (або enable, 1) — увімкнути репост для поточного чату
+      /video off (або disable, 0) — вимкнути репост для поточного чату
+      /video all off (або all on) — ТІЛЬКИ ДЛЯ ADMIN_IDS: масово увімкнути/вимкнути для ВСІХ груп у БД
+    """
+    chat = update.effective_chat
+    user = update.effective_user
+    if not update.message: return
+
+    is_bot_admin = user.id in ADMIN_IDS
+    args = context.args or []
+
+    # Перевірка на команду масового оновлення для всіх груп
+    if len(args) >= 2 and args[0].lower() == "all":
+        if not is_bot_admin:
+            await update.message.reply_text("🔒 Масове керування всіма групами доступне лише адміністраторам бота.")
+            return
+
+        action = args[1].lower()
+        if action in ["off", "disable", "0", "вимк"]:
+            target_state = False
+            state_text = "вимкнено"
+        elif action in ["on", "enable", "1", "увімк"]:
+            target_state = True
+            state_text = "увімкнено"
+        else:
+            await update.message.reply_text("ℹ️ Використання: <code>/video all off</code> або <code>/video all on</code>", parse_mode='HTML')
+            return
+
+        # Оновлюємо всі групи в базі (групи мають id < 0)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User).where(User.id < 0))
+            groups = result.scalars().all()
+            count = 0
+            for g in groups:
+                settings = dict(g.settings or {})
+                settings['video_repost'] = target_state
+                g.settings = settings
+                count += 1
+            await session.commit()
+
+        await update.message.reply_text(
+            f"✅ <b>Масове налаштування застосовано!</b>\n"
+            f"Репост відео {state_text} для всіх груп у базі ({count} груп).",
+            parse_mode='HTML'
+        )
+        return
+
+    # Перевірка прав для окремого чату
+    if chat.type != 'private' and not await check_chat_admin(update, context):
+        return
+
+    await get_or_create_user(chat)
+    chat_id = chat.id
+    is_group = chat_id < 0
+    default_val = DEFAULT_GROUP_SETTINGS.get('video_repost', True) if is_group else DEFAULT_SETTINGS.get('video_repost', True)
+
+    if args:
+        action = args[0].lower()
+        if action in ["off", "disable", "0", "вимк"]:
+            new_state = False
+        elif action in ["on", "enable", "1", "увімк"]:
+            new_state = True
+        elif action in ["status", "стан"]:
+            async with AsyncSessionLocal() as session:
+                u = await session.get(User, chat_id)
+                current_state = u.settings.get('video_repost', default_val) if u and u.settings else default_val
+            st_text = "увімкнено ✅" if current_state else "вимкнено ❌"
+            await update.message.reply_text(f"🎥 Автозавантаження/репост відео в цьому чаті: <b>{st_text}</b>", parse_mode='HTML')
+            return
+        else:
+            await update.message.reply_text(
+                "ℹ️ <b>Керування репостом відео:</b>\n"
+                "• <code>/video on</code> — увімкнути\n"
+                "• <code>/video off</code> — вимкнути\n"
+                "• <code>/video status</code> — перевірити стан",
+                parse_mode='HTML'
+            )
+            return
+
+        async with AsyncSessionLocal() as session:
+            u = await session.get(User, chat_id)
+            if u:
+                settings = dict(u.settings or {})
+                settings['video_repost'] = new_state
+                u.settings = settings
+                await session.commit()
+
+        st_text = "увімкнено ✅" if new_state else "вимкнено ❌"
+        await update.message.reply_text(f"🎥 Репост відео для цього чату <b>{st_text}</b>.", parse_mode='HTML')
+        return
+
+    # Якщо викликано без аргументів: показуємо поточний стан і кнопку перемикання
+    async with AsyncSessionLocal() as session:
+        u = await session.get(User, chat_id)
+        current_state = u.settings.get('video_repost', default_val) if u and u.settings else default_val
+
+    st_text = "увімкнено ✅" if current_state else "вимкнено ❌"
+    btn_text = f"🎥 Перемкнути (зараз: {'✅' if current_state else '❌'})"
+    keyboard = [
+        [InlineKeyboardButton(btn_text, callback_data="toggle_video_repost")],
+        [InlineKeyboardButton("🔙 Закрити", callback_data="close_menu")]
+    ]
+    await update.message.reply_text(
+        f"🎥 Автозавантаження та репост відео (Instagram, TikTok, Twitter тощо): <b>{st_text}</b>\n\n"
+        f"Змінити стан можна кнопкою нижче або командами <code>/video on</code> / <code>/video off</code>.",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='HTML'
     )

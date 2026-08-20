@@ -95,8 +95,11 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         settings = db_obj.settings if db_obj else (DEFAULT_GROUP_SETTINGS if is_group else DEFAULT_SETTINGS)
         show_debug = settings.get('show_model_name', False)
         context_mode = settings.get('context_mode', 'shared' if is_group else 'personal')
+        default_video = DEFAULT_GROUP_SETTINGS.get('video_repost', True) if is_group else DEFAULT_SETTINGS.get('video_repost', True)
+        video_repost = settings.get('video_repost', default_video)
 
     debug_icon = "✅" if show_debug else "❌"
+    video_icon = "✅" if video_repost else "❌"
 
     keyboard = [
         [
@@ -112,6 +115,8 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_group:
         mode_btn_text = "👥 Контекст: Спільний" if context_mode == 'shared' else "👤 Контекст: Особистий"
         keyboard.append([InlineKeyboardButton(mode_btn_text, callback_data="toggle_context_mode")])
+
+    keyboard.append([InlineKeyboardButton(f"🎥 Репост відео: {video_icon}", callback_data="toggle_video_repost")])
 
     if update.effective_chat.type == 'private':
         keyboard.append([InlineKeyboardButton("🔑 Ключі API", callback_data="keys_menu")])
@@ -213,6 +218,28 @@ async def toggle_context_mode(update: Update, context: ContextTypes.DEFAULT_TYPE
             await session.commit()
 
     await query.answer(f"Режим контексту: {'Спільний' if new_mode == 'shared' else 'Особистий'}")
+    await settings_menu(update, context)
+
+async def toggle_video_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not await check_group_admin(update, context): return
+
+    target_id = update.effective_chat.id
+    is_group = target_id < 0
+    default_val = DEFAULT_GROUP_SETTINGS.get('video_repost', True) if is_group else DEFAULT_SETTINGS.get('video_repost', True)
+    new_state = not default_val
+
+    async with AsyncSessionLocal() as session:
+        user = await session.get(User, target_id)
+        if user:
+            settings = dict(user.settings or {})
+            current_val = settings.get('video_repost', default_val)
+            new_state = not current_val
+            settings['video_repost'] = new_state
+            user.settings = settings
+            await session.commit()
+
+    await query.answer(f"Репост відео: {'Увімкнено' if new_state else 'Вимкнено'}")
     await settings_menu(update, context)
 
 async def toggle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):

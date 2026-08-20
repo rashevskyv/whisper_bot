@@ -10,26 +10,40 @@ os.environ["BOT_TOKEN"] = "123456:TEST_TOKEN"
 os.environ["ENCRYPTION_KEY"] = "8Z6wY6uP04B4uE6_7V8M3aQ1bC2dE3fG4hI5jK6lM7o="
 os.environ["ADMIN_IDS"] = "111,222"
 
-from bot.database.session import init_db, AsyncSessionLocal
-from bot.database.models import DownloadQueue, User
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy import delete
+from bot.database.models import Base, DownloadQueue, User
 from bot.utils.queue_manager import get_queue_stats, clear_pending_tasks, clear_all_tasks
 from bot.handlers.commands import queue_cmd
 from bot.handlers.settings import queue_menu, queue_clear_pending, queue_clear_all
 
 class TestQueueManager(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        await init_db()
-        # Clean table before each test
-        async with AsyncSessionLocal() as session:
-            from sqlalchemy import delete
-            await session.execute(delete(DownloadQueue))
-            await session.commit()
+        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.temp_db.close()
+        self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.temp_db.name}", echo=False)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        self.SessionLocal = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
+
+        self.patchers = [
+            patch("bot.database.session.AsyncSessionLocal", self.SessionLocal),
+            patch("bot.utils.queue_manager.AsyncSessionLocal", self.SessionLocal),
+            patch("bot.handlers.settings.AsyncSessionLocal", self.SessionLocal),
+            patch("bot.handlers.commands.AsyncSessionLocal", self.SessionLocal),
+        ]
+        for p in self.patchers:
+            p.start()
 
     async def asyncTearDown(self):
-        async with AsyncSessionLocal() as session:
-            from sqlalchemy import delete
-            await session.execute(delete(DownloadQueue))
-            await session.commit()
+        for p in self.patchers:
+            p.stop()
+        await self.engine.dispose()
+        if os.path.exists(self.temp_db.name):
+            try:
+                os.remove(self.temp_db.name)
+            except:
+                pass
 
     async def test_get_queue_stats_empty(self):
         stats = await get_queue_stats()
@@ -40,7 +54,7 @@ class TestQueueManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["total"], 0)
 
     async def test_get_queue_stats_populated(self):
-        async with AsyncSessionLocal() as session:
+        async with self.SessionLocal() as session:
             session.add_all([
                 DownloadQueue(user_id=1, link="http://example.com/1", status="pending"),
                 DownloadQueue(user_id=1, link="http://example.com/2", status="pending"),
@@ -59,7 +73,7 @@ class TestQueueManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["total"], 6)
 
     async def test_clear_pending_tasks(self):
-        async with AsyncSessionLocal() as session:
+        async with self.SessionLocal() as session:
             session.add_all([
                 DownloadQueue(user_id=1, link="http://example.com/1", status="pending"),
                 DownloadQueue(user_id=1, link="http://example.com/2", status="pending"),
@@ -78,7 +92,7 @@ class TestQueueManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["total"], 1)
 
     async def test_clear_all_tasks(self):
-        async with AsyncSessionLocal() as session:
+        async with self.SessionLocal() as session:
             session.add_all([
                 DownloadQueue(user_id=1, link="http://example.com/1", status="pending"),
                 DownloadQueue(user_id=1, link="http://example.com/2", status="done"),
@@ -92,7 +106,7 @@ class TestQueueManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["total"], 0)
 
     async def test_queue_command_clear(self):
-        async with AsyncSessionLocal() as session:
+        async with self.SessionLocal() as session:
             session.add_all([
                 DownloadQueue(user_id=1, link="http://example.com/1", status="pending"),
                 DownloadQueue(user_id=1, link="http://example.com/2", status="processing"),
@@ -136,7 +150,7 @@ class TestQueueManager(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(kwargs.get("reply_markup"))
 
     async def test_queue_menu_callbacks(self):
-        async with AsyncSessionLocal() as session:
+        async with self.SessionLocal() as session:
             session.add_all([
                 DownloadQueue(user_id=1, link="http://example.com/1", status="pending"),
                 DownloadQueue(user_id=1, link="http://example.com/2", status="done"),
