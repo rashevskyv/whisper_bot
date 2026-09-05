@@ -6,11 +6,43 @@ import google.generativeai as genai
 from google.ai.generativelanguage import FunctionDeclaration, Tool, Schema, Type
 from bot.ai.base import LLMProvider
 from config import DEFAULT_SETTINGS, BOT_TIMEZONE
-from bot.utils.search import perform_search, extract_source_links, format_sources_html
-from bot.utils.scheduler import scheduler_service
-from bot.utils.date_helper import calculate_future_date
+from bot.utils.search import format_sources_html
+from bot.ai.tools import get_tool_definitions, execute_tool, get_active_reminders_summary
 
 logger = logging.getLogger(__name__)
+
+_TYPE_MAP = {
+    "object": Type.OBJECT,
+    "string": Type.STRING,
+    "integer": Type.INTEGER,
+    "array": Type.ARRAY,
+}
+
+def _json_schema_to_google_schema(schema_dict: Dict[str, Any]) -> Schema:
+    type_str = schema_dict.get("type", "object")
+    gtype = _TYPE_MAP.get(type_str, Type.OBJECT)
+
+    kwargs: Dict[str, Any] = {"type": gtype}
+
+    if "description" in schema_dict:
+        kwargs["description"] = schema_dict["description"]
+
+    if "properties" in schema_dict:
+        properties = {}
+        for prop_name, prop_def in schema_dict["properties"].items():
+            properties[prop_name] = _json_schema_to_google_schema(prop_def)
+        kwargs["properties"] = properties
+
+    if "items" in schema_dict:
+        kwargs["items"] = _json_schema_to_google_schema(schema_dict["items"])
+
+    if "enum" in schema_dict:
+        kwargs["enum"] = schema_dict["enum"]
+
+    if "required" in schema_dict:
+        kwargs["required"] = schema_dict["required"]
+
+    return Schema(**kwargs)
 
 class GoogleProvider(LLMProvider):
     def __init__(self, api_key: str, model_name: str = 'gemini-1.5-flash'):
@@ -43,15 +75,13 @@ class GoogleProvider(LLMProvider):
 
     def _get_tools_proto(self, allow_search: bool):
         declarations = []
-        date_func = FunctionDeclaration(name="calculate_date", description="Convert LOCAL datetime string to UTC ISO.", parameters=Schema(type=Type.OBJECT, properties={"local_datetime": Schema(type=Type.STRING)}, required=["local_datetime"]))
-        declarations.append(date_func)
-        reminder_func = FunctionDeclaration(name="schedule_reminder", description="Schedule reminder.", parameters=Schema(type=Type.OBJECT, properties={"iso_time_utc": Schema(type=Type.STRING), "text": Schema(type=Type.STRING)}, required=["iso_time_utc", "text"]))
-        declarations.append(reminder_func)
-        del_func = FunctionDeclaration(name="delete_reminder", description="Delete reminder.", parameters=Schema(type=Type.OBJECT, properties={"reminder_id": Schema(type=Type.INTEGER)}, required=["reminder_id"]))
-        declarations.append(del_func)
-        if allow_search:
-            search_func = FunctionDeclaration(name="web_search", description="Search web.", parameters=Schema(type=Type.OBJECT, properties={"query": Schema(type=Type.STRING)}, required=["query"]))
-            declarations.append(search_func)
+        for tool_def in get_tool_definitions(allow_search):
+            decl = FunctionDeclaration(
+                name=tool_def["name"],
+                description=tool_def.get("description", ""),
+                parameters=_json_schema_to_google_schema(tool_def.get("parameters", {}))
+            )
+            declarations.append(decl)
         return Tool(function_declarations=declarations)
 
     async def generate_stream(self, messages: List[Dict[str, str]], settings: Dict[str, Any]) -> AsyncGenerator[str, None]:
@@ -65,7 +95,7 @@ class GoogleProvider(LLMProvider):
         current_time_str = now_local.strftime('%Y-%m-%d %H:%M:%S (%A)')
 
         chat_id = settings.get('chat_id')
-        active_reminders_text = await scheduler_service.get_active_reminders_string(chat_id, user_tz_name) if (chat_id and not disable_tools) else "None"
+        active_reminders_text = await get_active_reminders_summary(chat_id, user_tz_name) if (chat_id and not disable_tools) else "None"
 
         system_instruction_text, history = self._map_messages(messages)
 
@@ -112,7 +142,7 @@ class GoogleProvider(LLMProvider):
                     if chunk.text: yield chunk.text
 
                 # Логування токенів після завершення потоку
-                if response_stream and response_stream.usage_metadata:
+                if response_stream and hasattr(response_stream, 'usage_metadata') and response_stream.usage_metadata:
                     usage = response_stream.usage_metadata
                     logger.info(f"📊 [Gemini] Usage: Prompt={usage.prompt_token_count}, Candidates={usage.candidates_token_count}, Total={usage.total_token_count}")
 
@@ -121,42 +151,49 @@ class GoogleProvider(LLMProvider):
                     except: pass
 
                     fn_name = function_call_part.name
-                    fn_args = {k: v for k, v in function_call_part.args.items()}
-                    logger.info(f"🤖 Gemini Tool: {fn_name} | Args: {fn_args}")
-                    api_response = {}
+                    fn_args = {}
+                    if hasattr(function_call_part, "args") and function_call_part.args:
+                        fn_args = {k: v for k, v in function_call_part.args.items()}
 
-                    if fn_name == "calculate_date":
-                        res = calculate_future_date(fn_args.get("local_datetime"), user_tz_name)
-                        api_response = {"iso_date_utc": res}
+                    logger.info(f"🤖 Gemini Tool: {fn_name}")
+
+                    tool_result = await execute_tool(
+                        fn_name,
+                        fn_args,
+                        user_id=settings.get('user_id'),
+                        chat_id=chat_id,
+                        timezone_name=user_tz_name,
+                        source_message_id=settings.get("source_message_id"),
+                    )
+
+                    if tool_result.draft_id is not None:
+                        settings["_action_draft_id"] = tool_result.draft_id
+                        settings.pop("_shopping_list_id", None)
+                    elif tool_result.shopping_list_id is not None:
+                        settings["_shopping_list_id"] = tool_result.shopping_list_id
+                        settings.pop("_action_draft_id", None)
+
+                    if tool_result.display_text:
+                        yield tool_result.display_text
+
+                    for link in tool_result.source_urls:
+                        if link not in collected_source_urls and len(collected_source_urls) < 5:
+                            collected_source_urls.append(link)
+
+                    if not tool_result.stop:
                         keep_generating = True
-
-                    elif fn_name == "schedule_reminder":
-                        try:
-                            iso = fn_args.get("iso_time_utc")
-                            text = fn_args.get("text")
-                            dt_utc = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
-                            await scheduler_service.add_reminder(settings.get('user_id'), chat_id, text, dt_utc)
-                            l_dt = dt_utc.astimezone(tz)
-                            days = {"Monday":"Пн","Tuesday":"Вт","Wednesday":"Ср","Thursday":"Чт","Friday":"Пт","Saturday":"Сб","Sunday":"Нд"}
-                            d_name = days.get(l_dt.strftime("%A"), l_dt.strftime("%a"))
-                            yield f"\n✅ <b>Встановлено:</b> {d_name}, {l_dt.strftime('%d.%m %H:%M')}\n📝 <i>{text}</i>"
-                            api_response = {"status": "success"}
-                        except Exception as e: api_response = {"status": "error", "message": str(e)}
-
-                    elif fn_name == "delete_reminder":
-                        success = await scheduler_service.delete_reminder_by_id(int(fn_args.get("reminder_id")))
-                        api_response = {"status": "deleted" if success else "error"}
-                        if success: yield f"\n🗑 <b>Видалено ID: {fn_args.get('reminder_id')}</b>"
-
-                    elif fn_name == "web_search":
-                        res = await perform_search(fn_args.get("query", ""))
-                        api_response = {"result": res}
-                        keep_generating = True
-                        for link in extract_source_links(str(res)):
-                            if link not in collected_source_urls and len(collected_source_urls) < 5:
-                                collected_source_urls.append(link)
-
-                    current_prompt = genai.protos.Content(parts=[genai.protos.Part(function_response=genai.protos.FunctionResponse(name=fn_name, response=api_response))])
+                        current_prompt = genai.protos.Content(
+                            parts=[
+                                genai.protos.Part(
+                                    function_response=genai.protos.FunctionResponse(
+                                        name=fn_name,
+                                        response=tool_result.payload
+                                    )
+                                )
+                            ]
+                        )
+                    else:
+                        keep_generating = False
 
             except Exception as e:
                 logger.error(f"Gemini Loop Error: {e}")

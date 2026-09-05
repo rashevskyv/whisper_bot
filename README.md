@@ -15,6 +15,7 @@ The bot features **real-time web search**, smart summarization, context memory, 
   - 🌐 **Qwen 3.7 Flash** (`qwen/qwen3.7-flash`)
   - 🌪 **Mistral Small 3** (`mistralai/mistral-small-24b-instruct-2501`)
 - **Direct OpenAI & Gemini:** GPT-4o, GPT-4o-mini, Gemini 2.5 Flash / Pro.
+- **Unified Tool Engine:** All providers (OpenRouter, OpenAI, Google GenAI) share unified tool definitions, strict schema parity, and automated mutation safety controls.
 - **Flexible Access:** Users can provide their own API keys (`sk-or-v1-...`, `sk-...`, `AIza...`) to unlock models, or use the system configuration.
 
 ### 🌐 Live Web Search
@@ -24,6 +25,7 @@ The bot features **real-time web search**, smart summarization, context memory, 
 
 ### 🗣 Audio & Video Intelligence
 - **Universal Transcription:** Automatically converts voice messages, video notes (circles), and video files to text using OpenAI **GPT Transcribe** (`gpt-transcribe`).
+- **Safe Voice Action Flow:** Voice messages, video notes, and video files are safely transcribed first without executing actions automatically. Dedicated interactive buttons ("▶️ Обробити як інструкцію", "📝 Підсумувати", "✍️ Переформулювати", and "↩️ Використати як уточнення" for active clarifications) provide full explicit control over when AI instructions execute.
 - **Daily Usage Allowance:** Enforces a per-user daily quota of 60 minutes (3600 seconds) of successfully transcribed media (resetting daily at 00:00 UTC).
 - **Chat Glossary:** Manage transcription keywords and domain terms via `/terms` (e.g. `/terms term1, term2` or `/terms clear`).
 - **Smart Summarization:** Includes a "Summarize" button that transforms long, chaotic audio into structured bullet points using a specialized analyst persona.
@@ -39,10 +41,19 @@ The bot features **real-time web search**, smart summarization, context memory, 
 - **Interactive Menu:** Choose between **"Describe"** (get a detailed description) or **"OCR / Text"** (extract text from the image).
 - **Dual Engine:** Uses GPT-4o Vision or Gemini Vision depending on your active model.
 
-### ⏰ Smart Reminders & Scheduler
-- **Natural Language Triggers:** Create reminders naturally (e.g., "Remind me in 10 mins to call Mom").
-- **Timezone Aware:** Handles local time conversions automatically.
-- **Management UI:** View and delete active reminders.
+### ⏰ Smart Reminders & Recurring Schedules
+- **One-off Reminders:** Create reminders naturally (e.g., "Remind me in 10 mins to call Mom") with automatic local timezone conversion.
+- **Recurring Medication & Generic Schedules:** Schedule daily or weekday routines for medications, vitamins, workouts, or reports with exact dosage, timing, and recurrence rules.
+- **Action Previews & Clarifications:** Actions that modify schedules or lists require explicit Telegram confirmation ("✅ Confirm" / "❌ Cancel") via preview drafts (`ActionDraft`). If critical details (like dosage or time) are missing, the bot prompts for clarification before enabling confirmation.
+- **Interactive Occurrence Controls:** Scheduled notifications include inline buttons to mark **Done** (✅), **Skip** (⏭), or **Snooze** (⏰ 15m or 30m).
+- **Restart Resilience & Missed Policy:** Schedules, snoozes, and active drafts persist across restarts. Overdue offline occurrences are reconciled and summarized atomically without spamming the chat.
+- **Timezone Aware:** Full IANA timezone support handling local offsets, gaps, and daylight saving transitions seamlessly.
+
+### 🛒 Interactive Shopping & Task Lists
+- **Named & Chat-Scoped Lists:** Create and manage separate shopping lists (e.g., groceries, hardware) isolated per chat, with an automatic default list.
+- **Natural Language Actions:** Add items in bulk, view list contents, mark items as bought, undo, delete, or clear bought items.
+- **Interactive Inline Telegram UI:** Real-time inline keyboard controls let you toggle item status (✅ / ↩️), delete items (🗑), or clear completed items (🧹) directly on list messages.
+- **Group Privacy:** Strict chat isolation ensures items and lists are completely protected against cross-chat exposure.
 
 ### 💬 Advanced Chat Logic
 - **Streaming Responses:** Replies are typed out in real-time.

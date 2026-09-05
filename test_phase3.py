@@ -131,7 +131,7 @@ class TestPhase3SourcesAndLimits(unittest.IsolatedAsyncioTestCase):
         provider.client.chat.completions.create = AsyncMock(side_effect=[stream1, stream2])
 
         fake_search_output = "LINK: https://python.org/news\nDETAILS: info"
-        with patch("bot.ai.openai_provider.perform_search", AsyncMock(return_value=fake_search_output)):
+        with patch("bot.ai.tools.perform_search", AsyncMock(return_value=fake_search_output)):
             chunks = []
             async for chunk in provider.generate_stream(
                 messages=[{"role": "user", "content": "What's new in Python?"}],
@@ -192,7 +192,7 @@ class TestPhase3SourcesAndLimits(unittest.IsolatedAsyncioTestCase):
 
         fake_search_output = "LINK: https://blog.google/technology/ai/gemini\nDETAILS: info"
         with patch("google.generativeai.GenerativeModel.start_chat", return_value=mock_chat), \
-             patch("bot.ai.google_provider.perform_search", AsyncMock(return_value=fake_search_output)):
+             patch("bot.ai.tools.perform_search", AsyncMock(return_value=fake_search_output)):
             chunks = []
             async for chunk in provider.generate_stream(
                 messages=[{"role": "user", "content": "Gemini news"}],

@@ -8,9 +8,8 @@ from datetime import timedelta
 from typing import AsyncGenerator, List, Dict, Any
 from openai import AsyncOpenAI, APIError
 from bot.ai.base import LLMProvider
-from bot.utils.search import perform_search, extract_source_links, format_sources_html
-from bot.utils.scheduler import scheduler_service
-from bot.utils.date_helper import calculate_future_date
+from bot.utils.search import format_sources_html
+from bot.ai.tools import get_openai_tools, execute_tool, get_active_reminders_summary
 from config import BOT_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -27,56 +26,6 @@ class OpenAIProvider(LLMProvider):
         except: return False
         finally: await temp.close()
 
-    def _get_tools_schema(self, allow_search: bool) -> List[Dict[str, Any]]:
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "calculate_date",
-                    "description": "Convert LOCAL datetime string to UTC ISO.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"local_datetime": {"type": "string"}},
-                        "required": ["local_datetime"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "schedule_reminder",
-                    "description": "Schedule reminder in DB.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"iso_time_utc": {"type": "string"}, "text": {"type": "string"}},
-                        "required": ["iso_time_utc", "text"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "delete_reminder",
-                    "description": "Delete reminder.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"reminder_id": {"type": "integer"}},
-                        "required": ["reminder_id"]
-                    }
-                }
-            }
-        ]
-        if allow_search:
-            tools.append({
-                "type": "function",
-                "function": {
-                    "name": "web_search",
-                    "description": "Search web.",
-                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
-                }
-            })
-        return tools
-
     async def generate_stream(self, messages: List[Dict[str, str]], settings: Dict[str, Any]) -> AsyncGenerator[str, None]:
         model = settings.get('model', 'gpt-4o-mini')
         user_tz_name = settings.get('timezone', BOT_TIMEZONE)
@@ -92,7 +41,7 @@ class OpenAIProvider(LLMProvider):
 
         active_reminders_text = "None"
         if chat_id and not disable_tools:
-            active_reminders_text = await scheduler_service.get_active_reminders_string(chat_id, user_tz_name)
+            active_reminders_text = await get_active_reminders_summary(chat_id, user_tz_name)
 
         local_messages = [msg.copy() for msg in messages]
 
@@ -121,7 +70,7 @@ class OpenAIProvider(LLMProvider):
                 break
 
         # ВАЖЛИВО: tools = None, якщо disable_tools=True
-        tools = self._get_tools_schema(settings.get('allow_search', True)) if not disable_tools else None
+        tools = get_openai_tools(settings.get('allow_search', True)) if not disable_tools else None
 
         collected_source_urls: List[str] = []
         try:
@@ -160,35 +109,42 @@ class OpenAIProvider(LLMProvider):
 
                 should_stop_stream = False
                 for tc in tool_calls_list:
-                    name, args = tc["name"], json.loads(tc["arguments"])
-                    content = ""
-                    logger.info(f"🤖 OpenAI Tool: {name} | Args: {args}")
+                    name = tc["name"]
+                    try:
+                        args = json.loads(tc["arguments"])
+                    except Exception:
+                        args = None
 
-                    if name == "calculate_date":
-                        content = calculate_future_date(args.get("local_datetime"), user_tz_name)
-                    elif name == "schedule_reminder":
-                        try:
-                            iso_utc = args.get("iso_time_utc")
-                            text = args.get("text")
-                            dt_utc = datetime.datetime.fromisoformat(iso_utc.replace("Z", "+00:00"))
-                            await scheduler_service.add_reminder(user_id, chat_id, text, dt_utc)
-                            l_dt = dt_utc.astimezone(tz)
-                            days = {"Monday":"Пн","Tuesday":"Вт","Wednesday":"Ср","Thursday":"Чт","Friday":"Пт","Saturday":"Сб","Sunday":"Нд"}
-                            d_name = days.get(l_dt.strftime("%A"), l_dt.strftime("%a"))
-                            yield f"\n✅ <b>Встановлено:</b> {d_name}, {l_dt.strftime('%d.%m %H:%M')}\n📝 <i>{text}</i>"
-                            content, should_stop_stream = "DONE", True
-                        except Exception as e: content = f"ERROR: {e}"
-                    elif name == "delete_reminder":
-                        success = await scheduler_service.delete_reminder_by_id(args.get("reminder_id"))
-                        content = "Deleted" if success else "Not found"
-                    elif name == "web_search":
-                        yield "\n🔎 <i>Шукаю...</i>\n"
-                        content = await perform_search(args.get("query"))
-                        for link in extract_source_links(str(content)):
-                            if link not in collected_source_urls and len(collected_source_urls) < 5:
-                                collected_source_urls.append(link)
+                    logger.info(f"🤖 OpenAI Tool: {name}")
 
-                    local_messages.append({"role": "tool", "tool_call_id": tc["id"], "content": str(content)})
+                    tool_result = await execute_tool(
+                        name,
+                        args,
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        timezone_name=user_tz_name,
+                        source_message_id=settings.get("source_message_id"),
+                    )
+
+                    if tool_result.draft_id is not None:
+                        settings["_action_draft_id"] = tool_result.draft_id
+                        settings.pop("_shopping_list_id", None)
+                    elif tool_result.shopping_list_id is not None:
+                        settings["_shopping_list_id"] = tool_result.shopping_list_id
+                        settings.pop("_action_draft_id", None)
+
+                    if tool_result.display_text:
+                        yield tool_result.display_text
+
+                    for url in tool_result.source_urls:
+                        if url not in collected_source_urls and len(collected_source_urls) < 5:
+                            collected_source_urls.append(url)
+
+                    if tool_result.stop:
+                        should_stop_stream = True
+
+                    content = json.dumps(tool_result.payload, ensure_ascii=False)
+                    local_messages.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
 
                 if should_stop_stream: break
                 stream = await self.client.chat.completions.create(model=model, messages=local_messages, tools=tools, stream=True)

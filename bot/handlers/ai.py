@@ -1,14 +1,112 @@
 import logging
-from telegram import Update
+import re
+from typing import Optional
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatAction
 from telegram.ext import ContextTypes
 from bot.utils.helpers import get_ai_provider, send_long_message, clean_html, beautify_text
 from bot.utils.context import context_manager
 from bot.utils.media import download_file, cleanup_files
+from bot.utils.action_drafts import (
+    get_action_draft,
+    DRAFT_STATUS_PENDING_CONFIRMATION,
+    DRAFT_STATUS_AWAITING_INFO,
+)
+from bot.ai.tools import format_shopping_list_view
+from bot.utils.lists import (
+    get_user_list,
+    list_list_items,
+)
 from bot.handlers.common import get_user_model_settings, update_user_language
 from config import DEFAULT_SETTINGS
 
 logger = logging.getLogger(__name__)
+
+async def build_draft_reply_markup(draft_id: Optional[int], user_id: int, chat_id: int) -> Optional[InlineKeyboardMarkup]:
+    """Будує inline-кнопки на основі актуального стану збереженої ActionDraft."""
+    if not draft_id or not isinstance(draft_id, int):
+        return None
+    try:
+        draft = await get_action_draft(draft_id, user_id, chat_id)
+        if not draft:
+            return None
+        if draft.status == DRAFT_STATUS_PENDING_CONFIRMATION:
+            return InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Підтвердити", callback_data=f"draft:ok:{draft.id}"),
+                    InlineKeyboardButton("❌ Скасувати", callback_data=f"draft:no:{draft.id}"),
+                ]
+            ])
+        elif draft.status == DRAFT_STATUS_AWAITING_INFO:
+            return InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("❌ Скасувати", callback_data=f"draft:no:{draft.id}"),
+                ]
+            ])
+    except Exception:
+        logger.error(
+            f"Failed to build draft reply markup: draft_id={draft_id}, user_id={user_id}, chat_id={chat_id}"
+        )
+    return None
+
+_build_draft_reply_markup = build_draft_reply_markup
+
+
+async def build_shopping_list_view(
+    list_id: int,
+    chat_id: int,
+) -> tuple[Optional[str], Optional[InlineKeyboardMarkup]]:
+    """Будує актуальний текст і inline-кнопки для існуючого списку покупок у заданому чаті."""
+    if not isinstance(list_id, int) or isinstance(list_id, bool) or list_id <= 0:
+        return None, None
+    if not isinstance(chat_id, int) or isinstance(chat_id, bool) or chat_id == 0:
+        return None, None
+
+    try:
+        user_list = await get_user_list(list_id, chat_id)
+        if user_list is None:
+            return None, None
+
+        items = await list_list_items(list_id, chat_id)
+        if items is None:
+            return None, None
+
+        text = format_shopping_list_view(user_list.name, items)
+
+        keyboard: list[list[InlineKeyboardButton]] = []
+        # ponytail: first 30 item controls; add pagination only when large-list UX needs it.
+        for it in items[:30]:
+            clean_item_text = re.sub(r"\s+", " ", str(it.text or "")).strip()
+            if len(clean_item_text) > 25:
+                clean_item_text = clean_item_text[:25].rstrip() + "…"
+
+            label_suffix = f" {clean_item_text}" if clean_item_text else ""
+            if it.is_done:
+                toggle_btn = InlineKeyboardButton(
+                    f"↩️ #{it.id}{label_suffix}",
+                    callback_data=f"list:undo:{list_id}:{it.id}",
+                )
+            else:
+                toggle_btn = InlineKeyboardButton(
+                    f"✅ #{it.id}{label_suffix}",
+                    callback_data=f"list:done:{list_id}:{it.id}",
+                )
+            del_btn = InlineKeyboardButton(
+                "🗑",
+                callback_data=f"list:del:{list_id}:{it.id}",
+            )
+            keyboard.append([toggle_btn, del_btn])
+
+        if any(it.is_done for it in items):
+            keyboard.append([
+                InlineKeyboardButton("🧹 Очистити куплені", callback_data=f"list:clear:{list_id}")
+            ])
+
+        markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        return text, markup
+    except Exception:
+        logger.error(f"Database error in build_shopping_list_view: list_id={list_id}, chat_id={chat_id}")
+        return None, None
 
 async def stream_response(provider, messages, status_msg, user_id, chat_id, settings, save_to_history=True, reply_to_msg_id=None):
     full_response = ""
@@ -45,15 +143,38 @@ async def stream_response(provider, messages, status_msg, user_id, chat_id, sett
                 except Exception:
                     pass
 
+        reply_markup = await build_draft_reply_markup(settings.get('_action_draft_id'), user_id, chat_id)
+        if reply_markup is None:
+            shopping_list_id = settings.get('_shopping_list_id')
+            if (
+                isinstance(shopping_list_id, int)
+                and not isinstance(shopping_list_id, bool)
+                and shopping_list_id > 0
+            ):
+                try:
+                    _, shopping_markup = await build_shopping_list_view(shopping_list_id, chat_id)
+                    reply_markup = shopping_markup
+                except Exception:
+                    logger.error(
+                        f"Failed to attach shopping markup in stream_response: list_id={shopping_list_id}, chat_id={chat_id}"
+                    )
+                    reply_markup = None
+
         if len(full_response) <= 4000:
             try:
                 safe_text = clean_html(full_response)
-                await status_msg.edit_text(safe_text, parse_mode=ParseMode.HTML)
+                await status_msg.edit_text(safe_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
             except Exception:
-                await status_msg.edit_text(full_response)
+                await status_msg.edit_text(full_response, reply_markup=reply_markup)
         else:
             await status_msg.delete()
-            await send_long_message(status_msg.chat, full_response, parse_mode=ParseMode.HTML, reply_to_msg_id=reply_to_msg_id)
+            await send_long_message(
+                status_msg.chat,
+                full_response,
+                parse_mode=ParseMode.HTML,
+                reply_to_msg_id=reply_to_msg_id,
+                reply_markup=reply_markup
+            )
 
         if save_to_history:
             await context_manager.save_message(user_id, chat_id, 'assistant', full_response)
@@ -82,6 +203,7 @@ async def process_gpt_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     settings = await get_user_model_settings(user_id)
     settings['user_id'] = user_id
     settings['chat_id'] = chat_id
+    settings['source_message_id'] = reply_to_id
 
     messages = await context_manager.get_context(user_id, chat_id, limit=20)
 
@@ -127,7 +249,7 @@ async def summarize_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     ]
 
     settings = await get_user_model_settings(user_id)
-    settings.update({'allow_search': False, 'chat_id': chat_id})
+    settings.update({'allow_search': False, 'disable_tools': True, 'chat_id': chat_id})
 
     await stream_response(provider, messages, status_msg, user_id, chat_id, settings, save_to_history=False, reply_to_msg_id=reply_id)
 
@@ -146,7 +268,7 @@ async def reword_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text_t
     ]
 
     settings = await get_user_model_settings(user_id)
-    settings.update({'allow_search': False, 'chat_id': chat_id})
+    settings.update({'allow_search': False, 'disable_tools': True, 'chat_id': chat_id})
 
     await stream_response(provider, messages, status_msg, user_id, chat_id, settings, save_to_history=False, reply_to_msg_id=reply_id)
 

@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 RETENTION_DAYS = 30
 
 class ContextManager:
-    async def save_message(self, user_id: int, chat_id: int, role: str, content: str, media_id: str = None):
+    async def save_message(self, user_id: int, chat_id: int, role: str, content: str, media_id: str = None) -> int | None:
         """Зберігає повідомлення в історію конкретного чату"""
-        async with AsyncSessionLocal() as session:
-            try:
+        try:
+            async with AsyncSessionLocal() as session:
                 msg = MessageCache(
                     user_id=user_id,
                     chat_id=chat_id,
@@ -24,8 +24,11 @@ class ContextManager:
                 )
                 session.add(msg)
                 await session.commit()
-            except Exception as e:
-                logger.error(f"Failed to save message context: {e}")
+                await session.refresh(msg)
+                return msg.id
+        except Exception as e:
+            logger.error(f"Failed to save message context: {e}")
+            return None
 
     async def prune_expired_cache(self, session, chat_id: int, retention_days: int = RETENTION_DAYS):
         """Видаляє застарілі записи з кешу повідомлень для поточного чату."""
@@ -129,25 +132,29 @@ class ContextManager:
             await session.commit()
             return res.rowcount or 0
 
-    async def get_last_transcription(self, user_id: int, chat_id: int) -> str:
+    async def get_transcription_by_id(self, transcription_id: int, user_id: int, chat_id: int) -> str | None:
         """
-        Шукає останню транскрипцію (ізольовану).
+        Шукає транскрипцію за точним id, user_id, chat_id та роллю 'transcription'.
         """
+        try:
+            tid = int(transcription_id)
+        except (ValueError, TypeError):
+            return None
+
         async with AsyncSessionLocal() as session:
             stmt = (
                 select(MessageCache)
                 .where(
                     and_(
+                        MessageCache.id == tid,
                         MessageCache.user_id == user_id,
                         MessageCache.chat_id == chat_id,
                         MessageCache.role == 'transcription'
                     )
                 )
-                .order_by(desc(MessageCache.timestamp))
-                .limit(1)
             )
             result = await session.execute(stmt)
             msg = result.scalar_one_or_none()
-            return msg.content.replace("[Транскрипція]: ", "", 1) if msg else None
+            return msg.content if msg else None
 
 context_manager = ContextManager()

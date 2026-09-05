@@ -6,13 +6,19 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
 from bot.database.session import AsyncSessionLocal
 from bot.database.models import DownloadQueue
 from bot.utils.context import context_manager
 from bot.utils.downloader import download_media_direct
+from bot.utils.action_drafts import (
+    get_active_action_draft,
+    DRAFT_STATUS_AWAITING_INFO,
+)
+from bot.ai.tools import apply_action_draft_reply
 from bot.handlers.settings import get_main_menu_keyboard
 from bot.handlers.common import should_respond, get_user_model_settings
-from bot.handlers.ai import process_gpt_request
+from bot.handlers.ai import process_gpt_request, build_draft_reply_markup
 from bot.utils.scheduler import scheduler_service
 from config import BOT_TIMEZONE
 
@@ -130,6 +136,69 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     is_private = update.effective_chat.type == 'private'
     user_log = get_log_user(user, chat_id)
+
+    # Intercept text if an owned active ActionDraft is awaiting clarification
+    try:
+        active_draft = await get_active_action_draft(user.id, chat_id)
+    except Exception:
+        logger.error(f"Failed to check active action draft: user_id={user.id}, chat_id={chat_id}")
+        active_draft = None
+    if active_draft and active_draft.status == DRAFT_STATUS_AWAITING_INFO:
+        user_tz = BOT_TIMEZONE
+        try:
+            settings = await get_user_model_settings(user.id)
+            if isinstance(settings, dict) and settings.get('timezone'):
+                tz_val = str(settings['timezone']).strip()
+                if tz_val:
+                    try:
+                        zoneinfo.ZoneInfo(tz_val)
+                        user_tz = tz_val
+                    except Exception:
+                        user_tz = BOT_TIMEZONE
+        except Exception:
+            logger.error(
+                f"Failed to get user settings for clarification: draft_id={active_draft.id}, user_id={user.id}, chat_id={chat_id}"
+            )
+            user_tz = BOT_TIMEZONE
+
+        try:
+            result = await apply_action_draft_reply(
+                draft_id=active_draft.id,
+                user_id=user.id,
+                chat_id=chat_id,
+                reply_text=text,
+                timezone_name=user_tz,
+            )
+        except Exception:
+            logger.error(
+                f"Failed to apply clarification reply: draft_id={active_draft.id}, user_id={user.id}, chat_id={chat_id}"
+            )
+            fallback_markup = await build_draft_reply_markup(active_draft.id, user.id, chat_id)
+            await message.reply_text(
+                "⚠️ Не вдалося обробити уточнення. Спробуйте ще раз або скасуйте дію.",
+                reply_markup=fallback_markup,
+                quote=True,
+            )
+            return
+
+        target_draft_id = result.draft_id or active_draft.id
+        markup = None
+        if target_draft_id:
+            markup = await build_draft_reply_markup(target_draft_id, user.id, chat_id)
+
+        display_text = result.display_text or "⏳ Термін дії чернетки вичерпано або стан чернетки змінився."
+        has_formatting = bool(re.search(r"</?(b|i|code|a|pre)\b", display_text))
+        await message.reply_text(
+            display_text,
+            reply_markup=markup,
+            parse_mode=ParseMode.HTML if has_formatting else None,
+            quote=True,
+        )
+        logger.info(
+            f"Draft clarification handled: draft_id={target_draft_id}, action={result.payload.get('action_type')}, "
+            f"status={result.payload.get('status')}, user_id={user.id}, chat_id={chat_id}"
+        )
+        return
 
     # 0. Сценарій 1 (Реплай на фото)
     if (message.reply_to_message and

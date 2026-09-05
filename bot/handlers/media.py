@@ -7,6 +7,10 @@ from bot.utils.helpers import get_ai_provider, send_long_message, beautify_text
 from bot.utils.context import context_manager
 from bot.utils.media import download_file, extract_audio, cleanup_files, validate_audio_size
 from bot.utils.limits import check_transcription_limit, record_transcription_usage
+from bot.utils.action_drafts import (
+    get_active_action_draft,
+    DRAFT_STATUS_AWAITING_INFO,
+)
 from bot.handlers.common import should_respond, get_user_model_settings, MEDIA_GROUP_CACHE
 
 logger = logging.getLogger(__name__)
@@ -252,19 +256,57 @@ async def handle_voice_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if status: await status.delete()
 
         if clean_text:
+            transcription_id = await context_manager.save_message(user.id, chat_id, 'transcription', clean_text)
+
+            active_draft = None
+            if transcription_id is not None and isinstance(transcription_id, int) and transcription_id > 0:
+                try:
+                    active_draft = await get_active_action_draft(user.id, chat_id)
+                except Exception:
+                    logger.error(
+                        f"Failed to check active action draft: transcription_id={transcription_id}, user_id={user.id}, chat_id={chat_id}"
+                    )
+                    active_draft = None
+
+            has_clarification = (
+                active_draft is not None
+                and active_draft.status == DRAFT_STATUS_AWAITING_INFO
+                and isinstance(active_draft.id, int)
+                and active_draft.id > 0
+            )
+
             kb = None
             if update.effective_chat.type == 'private':
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🤖 Відправити боту", callback_data="run_gpt")],
-                    [InlineKeyboardButton("📝 Підсумувати", callback_data="summarize"), InlineKeyboardButton("✍️ Переформулювати", callback_data="reword")],
-                    [InlineKeyboardButton("🗑 Видалити", callback_data="delete_msg")]
-                ])
+                buttons = []
+                if transcription_id is not None:
+                    if has_clarification:
+                        buttons.append([
+                            InlineKeyboardButton(
+                                "↩️ Використати як уточнення",
+                                callback_data=f"draft:fill:{active_draft.id}:{transcription_id}"
+                            )
+                        ])
+                    buttons.append([InlineKeyboardButton("▶️ Обробити як інструкцію", callback_data=f"run_gpt:{transcription_id}")])
+                    buttons.append([
+                        InlineKeyboardButton("📝 Підсумувати", callback_data=f"summarize:{transcription_id}"),
+                        InlineKeyboardButton("✍️ Переформулювати", callback_data=f"reword:{transcription_id}")
+                    ])
+                buttons.append([InlineKeyboardButton("🗑 Видалити", callback_data="delete_msg")])
+                kb = InlineKeyboardMarkup(buttons)
+            else:
+                if has_clarification and transcription_id is not None:
+                    kb = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton(
+                                "↩️ Використати як уточнення",
+                                callback_data=f"draft:fill:{active_draft.id}:{transcription_id}"
+                            )
+                        ]
+                    ])
 
             final_output = clean_text
             if settings.get('show_model_name', False):
                 final_output = f"[{beautify_model}]\n{clean_text}"
-
-            await context_manager.save_message(user.id, chat_id, 'transcription', clean_text)
 
             await send_long_message(
                 update.message,

@@ -45,6 +45,7 @@ async def post_init(application: Application):
     logger.info("📦 [MainBot] DB initialized (WAL mode).")
     scheduler_service.start(application)
     await scheduler_service.restore_reminders()
+    await scheduler_service.restore_scheduled_tasks()
     logger.info("⏰ [MainBot] Scheduler started.")
 
 def main():

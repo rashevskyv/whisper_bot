@@ -8,9 +8,8 @@ from datetime import timedelta
 from typing import AsyncGenerator, List, Dict, Any, Optional
 from openai import AsyncOpenAI, APIError
 from bot.ai.base import LLMProvider
-from bot.utils.search import perform_search, extract_source_links, format_sources_html
-from bot.utils.scheduler import scheduler_service
-from bot.utils.date_helper import calculate_future_date
+from bot.utils.search import format_sources_html
+from bot.ai.tools import get_openai_tools, execute_tool, get_active_reminders_summary
 from config import BOT_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -48,56 +47,6 @@ class OpenRouterProvider(LLMProvider):
         finally:
             await temp.close()
 
-    def _get_tools_schema(self, allow_search: bool) -> List[Dict[str, Any]]:
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "calculate_date",
-                    "description": "Convert LOCAL datetime string to UTC ISO.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"local_datetime": {"type": "string"}},
-                        "required": ["local_datetime"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "schedule_reminder",
-                    "description": "Schedule reminder in DB.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"iso_time_utc": {"type": "string"}, "text": {"type": "string"}},
-                        "required": ["iso_time_utc", "text"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "delete_reminder",
-                    "description": "Delete reminder.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"reminder_id": {"type": "integer"}},
-                        "required": ["reminder_id"]
-                    }
-                }
-            }
-        ]
-        if allow_search:
-            tools.append({
-                "type": "function",
-                "function": {
-                    "name": "web_search",
-                    "description": "Search web.",
-                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
-                }
-            })
-        return tools
-
     async def generate_stream(self, messages: List[Dict[str, str]], settings: Dict[str, Any]) -> AsyncGenerator[str, None]:
         model = settings.get('model', self.default_model)
         user_tz_name = settings.get('timezone', BOT_TIMEZONE)
@@ -115,7 +64,7 @@ class OpenRouterProvider(LLMProvider):
 
         active_reminders_text = "None"
         if chat_id and not disable_tools:
-            active_reminders_text = await scheduler_service.get_active_reminders_string(chat_id, user_tz_name)
+            active_reminders_text = await get_active_reminders_summary(chat_id, user_tz_name)
 
         local_messages = [msg.copy() for msg in messages]
 
@@ -145,7 +94,7 @@ class OpenRouterProvider(LLMProvider):
                 msg['content'] = f"{clock_metadata}\n\nUSER REQUEST: {msg['content']}"
                 break
 
-        tools = self._get_tools_schema(settings.get('allow_search', True)) if not disable_tools else None
+        tools = get_openai_tools(settings.get('allow_search', True)) if not disable_tools else None
         collected_source_urls: List[str] = []
 
         try:
@@ -207,41 +156,42 @@ class OpenRouterProvider(LLMProvider):
                     ]
                 })
 
+                should_stop_stream = False
                 for tc_data in tool_calls_buffer.values():
                     fn_name = tc_data["name"]
                     try:
                         args = json.loads(tc_data["arguments"])
                     except Exception:
-                        args = {}
+                        args = None
+                    logger.info(f"🤖 OpenRouter Tool: {fn_name}")
 
-                    fn_result = "error"
-                    try:
-                        if fn_name == "calculate_date":
-                            iso_res = calculate_future_date(args.get("local_datetime"), user_tz_name)
-                            fn_result = json.dumps({"iso_time_utc": iso_res} if iso_res else {"error": "Invalid date"})
+                    tool_result = await execute_tool(
+                        fn_name,
+                        args,
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        timezone_name=user_tz_name,
+                        source_message_id=settings.get("source_message_id"),
+                    )
 
-                        elif fn_name == "schedule_reminder":
-                            if not chat_id:
-                                fn_result = json.dumps({"error": "No chat_id"})
-                            else:
-                                dt = datetime.datetime.fromisoformat(args.get("iso_time_utc"))
-                                rem_id = await scheduler_service.add_reminder(chat_id, user_id, dt, args.get("text"))
-                                fn_result = json.dumps({"success": True, "reminder_id": rem_id})
+                    if tool_result.draft_id is not None:
+                        settings["_action_draft_id"] = tool_result.draft_id
+                        settings.pop("_shopping_list_id", None)
+                    elif tool_result.shopping_list_id is not None:
+                        settings["_shopping_list_id"] = tool_result.shopping_list_id
+                        settings.pop("_action_draft_id", None)
 
-                        elif fn_name == "delete_reminder":
-                            success = await scheduler_service.delete_reminder(args.get("reminder_id"))
-                            fn_result = json.dumps({"success": success})
+                    if tool_result.display_text:
+                        yield tool_result.display_text
 
-                        elif fn_name == "web_search":
-                            q = args.get("query")
-                            raw_search_res = await perform_search(q)
-                            extracted = extract_source_links(raw_search_res)
-                            for link in extracted:
-                                if link not in collected_source_urls:
-                                    collected_source_urls.append(link)
-                            fn_result = json.dumps({"results": raw_search_res[:1500]})
-                    except Exception as err:
-                        fn_result = json.dumps({"error": str(err)})
+                    for link in tool_result.source_urls:
+                        if link not in collected_source_urls and len(collected_source_urls) < 5:
+                            collected_source_urls.append(link)
+
+                    if tool_result.stop:
+                        should_stop_stream = True
+
+                    fn_result = json.dumps(tool_result.payload, ensure_ascii=False)
 
                     local_messages.append({
                         "role": "tool",
@@ -249,6 +199,11 @@ class OpenRouterProvider(LLMProvider):
                         "name": fn_name,
                         "content": fn_result
                     })
+
+                if should_stop_stream:
+                    if collected_source_urls:
+                        yield format_sources_html(collected_source_urls)
+                    break
 
                 next_kwargs: Dict[str, Any] = {
                     "model": model,

@@ -30,8 +30,8 @@ def calculate_future_date(local_dt_string: str, user_timezone: str = None) -> st
             
         return dt_utc.isoformat()
         
-    except Exception as e:
-        logger.error(f"Date parsing fatal error for '{local_dt_string}': {e}")
+    except Exception:
+        logger.error("Strict date parsing failed, falling back to dateparser")
         # Try fallback to dateparser if AI didn't follow the format
         try:
             dt = dateparser.parse(local_dt_string, settings={'TIMEZONE': tz_str, 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})

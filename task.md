@@ -20,3 +20,24 @@
 - [x] Додати кнопку перемикання «🎥 Репост відео: ✅/❌» у меню налаштувань `settings_menu` (`toggle_video_repost`).
 - [x] Реалізувати команду `/video` (`/video on`, `/video off`, `/video status`, `/video all off` для адміністраторів бота).
 - [x] Покрити функціонал перемикання репосту відео модульними тестами (`test_video_repost.py`).
+
+## Завершена задача — контекстні дії та розклади v2.5.0
+
+- [x] Гарантувати, що голосове повідомлення лише транскрибується і не виконує tools без явної кнопки.
+- [x] Прив'язати callback до конкретної транскрипції, а не до останнього запису в чаті.
+- [x] Винести наявні AI tools у спільний валідований executor і вирівняти OpenAI/OpenRouter/Google.
+- [x] Додати персистентну модель `ActionDraft` і lifecycle з expiry, ownership та однією активною чернеткою на user/chat.
+- [x] Перехоплювати AI mutating tools у `ActionDraft` без side effect і повертати прев'ю або одне уточнення.
+- [x] Додати confirm/cancel callback-и з ownership та виконанням лише для переможця confirm.
+- [x] Маршрутизувати текстову відповідь або явну транскрипцію в активну `awaiting_info` чернетку.
+- [x] Додати повторювані задачі й occurrences для медикаментів/інших розкладів з done/skip/snooze:
+  - [x] D1 — таблиці та чистий DB-lifecycle без AI, Telegram і APScheduler;
+  - [x] D2 — планування, доставка, missed policy та restore після restart;
+  - [x] D3 — ActionDraft для medication/generic schedule з уточненням і прев'ю;
+  - [x] D4 — callback-и `done`/`skip`/`snooze` та персистентний snooze.
+- [x] Додати іменовані списки та пункти списків; реалізувати контекст «Покупки»:
+  - [x] E1 — таблиці та чистий DB-lifecycle з детермінованим resolve й атомарними змінами;
+  - [x] E2 — shared AI actions і `ActionDraft` для mutating list actions;
+  - [x] E3 — Telegram callback-и пунктів та наскрізні shopping-flow тести.
+- [x] Покрити voice safety, provider parity, draft lifecycle, scheduler restore/timezone та list isolation тестами.
+- [x] Після приймання оновити README/walkthrough/Graphify, підняти `APP_VERSION` до `2.5.0` і створити focused commit.
