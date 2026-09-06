@@ -62,3 +62,9 @@
 - [x] Не змінювати груповий timezone workflow: його встановлює адміністратор групи.
 - [x] Безпечна обробка stale Telegram callback у shopping list: перехоплення BadRequest окремо від DB-помилок, усунення другого query.answer, запобігання зайвому traceback, безпечне логування safe IDs (action, list_id, chat_id, user_id) та захист fallback query.answer при реальних DB-помилках.
 - [x] Додати focused regression tests, підняти версію до `2.5.2`, перевірити повний suite і створити focused commit після senior-review.
+
+## Завершена задача — канонічний Kyiv timezone picker v2.5.3
+
+- [x] Кнопка `Kyiv` має надсилати `Europe/Kyiv`, а не застарілий `Europe/Kiev`.
+- [x] Після вибору кнопкою або введення `Europe/Kyiv` private onboarding не має повторно показуватись для наступного AI-запиту.
+- [x] Додати мінімальні регресійні тести, підняти `APP_VERSION` до `2.5.3` і перевірити релевантний набір.

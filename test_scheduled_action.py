@@ -1116,8 +1116,8 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
             # 1. Private chat uses user timezone (UTC preserved)
             self.assertEqual(await get_effective_timezone(1001, 1001), "UTC")
 
-            # 2. Group chat uses group timezone (Europe/Kiev overrides user's UTC)
-            self.assertEqual(await get_effective_timezone(1001, -2001), "Europe/Kiev")
+            # 2. Group chat uses group timezone (Europe/Kiev legacy resolves canonically to Europe/Kyiv)
+            self.assertEqual(await get_effective_timezone(1001, -2001), "Europe/Kyiv")
 
             # 3. Group with no timezone falls back to BOT_TIMEZONE
             self.assertEqual(await get_effective_timezone(1001, -2002), BOT_TIMEZONE)
@@ -1166,7 +1166,7 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
 
             mock_stream.assert_awaited_once()
             passed_settings_g = mock_stream.call_args[0][5]
-            self.assertEqual(passed_settings_g["timezone"], "Europe/Kiev")
+            self.assertEqual(passed_settings_g["timezone"], "Europe/Kyiv")
 
         # Private update: preserves explicit UTC
         update_p = MagicMock()
@@ -1242,7 +1242,7 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
 
             mock_exec.assert_awaited_once()
             called_kwargs_g = mock_exec.call_args[1]
-            self.assertEqual(called_kwargs_g["timezone_name"], "Europe/Kiev")
+            self.assertEqual(called_kwargs_g["timezone_name"], "Europe/Kyiv")
 
         # 2. Private confirm
         update_p = MagicMock()
@@ -1391,8 +1391,8 @@ class TestTimezoneOnboardingV252(unittest.IsolatedAsyncioTestCase):
             mock_msg.reply_text.assert_called_once()
             self.assertEqual(mock_msg.reply_text.call_args[0][0], TIMEZONE_ONBOARDING_TEXT)
 
-    # 5. After selecting Europe/Kiev, timezone_selected=True is persisted and private AI request proceeds
-    async def test_select_europe_kiev_persists_and_unblocks_ai(self):
+    # 5. After selecting Europe/Kyiv, timezone_selected=True is persisted and private AI request proceeds
+    async def test_select_europe_kyiv_persists_and_unblocks_ai(self):
         from bot.handlers.settings import set_timezone_btn
         from bot.handlers.ai import process_gpt_request
         from bot.database.models import User
@@ -1404,7 +1404,7 @@ class TestTimezoneOnboardingV252(unittest.IsolatedAsyncioTestCase):
 
         update_btn = MagicMock()
         query_btn = MagicMock()
-        query_btn.data = "set_tz_Europe/Kiev"
+        query_btn.data = "set_tz_Europe/Kyiv"
         query_btn.answer = AsyncMock()
         query_btn.edit_message_text = AsyncMock()
         update_btn.callback_query = query_btn
@@ -1412,12 +1412,14 @@ class TestTimezoneOnboardingV252(unittest.IsolatedAsyncioTestCase):
         update_btn.effective_chat.type = "private"
         update_btn.effective_user.id = 7005
 
-        await set_timezone_btn(update_btn, MagicMock())
+        with patch("bot.handlers.settings.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal):
+            await set_timezone_btn(update_btn, MagicMock())
 
-        async with self.SessionLocal() as session:
-            db_user = await session.get(User, 7005)
-            self.assertEqual(db_user.settings.get("timezone"), "Europe/Kiev")
-            self.assertTrue(db_user.settings.get("timezone_selected"))
+            async with self.SessionLocal() as session:
+                db_user = await session.get(User, 7005)
+                self.assertEqual(db_user.settings.get("timezone"), "Europe/Kyiv")
+                self.assertTrue(db_user.settings.get("timezone_selected"))
 
         # Subsequent private AI request proceeds
         update_ai = MagicMock()
@@ -1434,13 +1436,14 @@ class TestTimezoneOnboardingV252(unittest.IsolatedAsyncioTestCase):
         mock_stream = AsyncMock()
         context_ai = MagicMock()
         context_ai.bot.send_chat_action = AsyncMock()
-        with patch("bot.handlers.ai.get_ai_provider", AsyncMock(return_value=mock_provider)), \
+        with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.ai.get_ai_provider", AsyncMock(return_value=mock_provider)), \
              patch("bot.handlers.ai.stream_response", mock_stream), \
              patch("bot.handlers.ai.context_manager.get_context", AsyncMock(return_value=[])):
             await process_gpt_request(update_ai, context_ai, user_id=7005, manual_text="Привіт")
             mock_stream.assert_awaited_once()
             passed_settings = mock_stream.call_args[0][5]
-            self.assertEqual(passed_settings["timezone"], "Europe/Kiev")
+            self.assertEqual(passed_settings["timezone"], "Europe/Kyiv")
 
     # 6. Explicit selected UTC remains UTC and is not overwritten by BOT_TIMEZONE
     async def test_explicit_utc_preserved(self):
@@ -1681,7 +1684,7 @@ class TestTimezoneOnboardingV252(unittest.IsolatedAsyncioTestCase):
             await process_gpt_request(update_g, context, user_id=7011, manual_text="Group query")
             mock_stream.assert_awaited_once()
             passed_settings_g = mock_stream.call_args[0][5]
-            self.assertEqual(passed_settings_g["timezone"], "Europe/Kiev")
+            self.assertEqual(passed_settings_g["timezone"], "Europe/Kyiv")
 
     # 12. Existing transcription regression: voice instruction callback is gated before AI
     async def test_transcription_voice_instruction_gated(self):
@@ -1708,6 +1711,165 @@ class TestTimezoneOnboardingV252(unittest.IsolatedAsyncioTestCase):
             mock_get_provider.assert_not_called()
             query.message.reply_text.assert_called_once()
             self.assertEqual(query.message.reply_text.call_args[0][0], TIMEZONE_ONBOARDING_TEXT)
+
+    # 52. Exact picker callback data: Kyiv button sends set_tz_Europe/Kyiv and never legacy set_tz_Europe/Kiev
+    def test_timezone_picker_exact_callback_data(self):
+        from bot.handlers.settings import get_timezone_keyboard
+
+        kb_onboarding = get_timezone_keyboard(include_back=False)
+        buttons_flat = [btn for row in kb_onboarding.inline_keyboard for btn in row]
+        callback_datas = [btn.callback_data for btn in buttons_flat]
+
+        # 1. Kyiv button sends exact canonical set_tz_Europe/Kyiv
+        kyiv_buttons = [btn for btn in buttons_flat if "Kyiv" in btn.text]
+        self.assertEqual(len(kyiv_buttons), 1)
+        self.assertEqual(kyiv_buttons[0].callback_data, "set_tz_Europe/Kyiv")
+
+        # 2. Legacy set_tz_Europe/Kiev is strictly never emitted
+        self.assertNotIn("set_tz_Europe/Kiev", callback_datas)
+
+        # 3. Same contract holds when include_back=True
+        kb_settings = get_timezone_keyboard(include_back=True)
+        callback_datas_back = [btn.callback_data for row in kb_settings.inline_keyboard for btn in row]
+        self.assertIn("set_tz_Europe/Kyiv", callback_datas_back)
+        self.assertNotIn("set_tz_Europe/Kiev", callback_datas_back)
+
+    # 53. Legacy alias normalization in effective timezone resolution (even when ZoneInfo("Europe/Kiev") fails)
+    async def test_legacy_alias_normalization_in_effective_timezone_resolution(self):
+        import zoneinfo
+        from bot.handlers.common import get_effective_timezone, normalize_timezone
+        from bot.database.models import User
+
+        # 1. Direct helper contract
+        self.assertEqual(normalize_timezone("Europe/Kiev"), "Europe/Kyiv")
+        self.assertEqual(normalize_timezone(" Europe/Kiev "), "Europe/Kyiv")
+        self.assertEqual(normalize_timezone("Europe/Kyiv"), "Europe/Kyiv")
+        self.assertEqual(normalize_timezone("UTC"), "UTC")
+
+        # 2. Database user with legacy Europe/Kiev
+        async with self.SessionLocal() as session:
+            legacy_tz_user = User(id=7050, username="u7050", full_name="User", settings={"timezone": "Europe/Kiev", "timezone_selected": True})
+            session.add(legacy_tz_user)
+            await session.commit()
+
+        # Simulate host where ZoneInfo("Europe/Kiev") raises ZoneInfoNotFoundError but Europe/Kyiv succeeds
+        real_zoneinfo = zoneinfo.ZoneInfo
+        def mock_zoneinfo(key):
+            if key == "Europe/Kiev":
+                raise zoneinfo.ZoneInfoNotFoundError("Europe/Kiev")
+            return real_zoneinfo(key)
+
+        with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal), \
+             patch("zoneinfo.ZoneInfo", side_effect=mock_zoneinfo):
+            eff_tz = await get_effective_timezone(7050, 7050)
+            self.assertEqual(eff_tz, "Europe/Kyiv")
+
+        # 3. BOT_TIMEZONE legacy normalization fallback
+        with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.common.BOT_TIMEZONE", "Europe/Kiev"), \
+             patch("zoneinfo.ZoneInfo", side_effect=mock_zoneinfo):
+            eff_fallback = await get_effective_timezone(None, None)
+            self.assertEqual(eff_fallback, "Europe/Kyiv")
+
+    # 54. Manual input Europe/Kyiv persists canonical Europe/Kyiv, sets timezone_selected=True, and unblocks subsequent private AI request
+    async def test_manual_canonical_kyiv_persists_and_unblocks_ai(self):
+        from bot.handlers.settings import save_custom_timezone
+        from bot.handlers.ai import process_gpt_request
+        from telegram.ext import ConversationHandler
+        from bot.database.models import User
+
+        # New user without initial DB record
+        update_tz = MagicMock()
+        update_tz.effective_chat.id = 7051
+        update_tz.effective_chat.type = "private"
+        update_tz.effective_user.id = 7051
+        msg_mock = MagicMock()
+        msg_mock.text = "Europe/Kyiv"
+        msg_mock.reply_text = AsyncMock()
+        update_tz.message = msg_mock
+
+        with patch("bot.handlers.settings.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal):
+            res = await save_custom_timezone(update_tz, MagicMock())
+            self.assertEqual(res, ConversationHandler.END)
+
+            async with self.SessionLocal() as session:
+                db_user = await session.get(User, 7051)
+                self.assertIsNotNone(db_user)
+                self.assertEqual(db_user.settings.get("timezone"), "Europe/Kyiv")
+                self.assertTrue(db_user.settings.get("timezone_selected"))
+
+            # Subsequent private AI request proceeds
+            update_ai = MagicMock()
+            update_ai.effective_chat.id = 7051
+            update_ai.effective_chat.type = "private"
+            update_ai.effective_user.id = 7051
+            update_ai.callback_query = None
+            mock_msg = MagicMock()
+            mock_msg.message_id = 902
+            mock_msg.reply_text = AsyncMock(return_value=MagicMock())
+            update_ai.message = mock_msg
+
+            mock_provider = MagicMock()
+            mock_stream = AsyncMock()
+            context_ai = MagicMock()
+            context_ai.bot.send_chat_action = AsyncMock()
+            with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal), \
+                 patch("bot.handlers.ai.get_ai_provider", AsyncMock(return_value=mock_provider)), \
+                 patch("bot.handlers.ai.stream_response", mock_stream), \
+                 patch("bot.handlers.ai.context_manager.get_context", AsyncMock(return_value=[])):
+                await process_gpt_request(update_ai, context_ai, user_id=7051, manual_text="Привіт")
+                mock_stream.assert_awaited_once()
+                passed_settings = mock_stream.call_args[0][5]
+                self.assertEqual(passed_settings["timezone"], "Europe/Kyiv")
+
+    # 55. Manual input of legacy Europe/Kiev is normalized and persisted as canonical Europe/Kyiv
+    async def test_manual_legacy_kiev_normalized_and_persisted_canonically(self):
+        from bot.handlers.settings import save_custom_timezone, set_timezone_btn
+        from telegram.ext import ConversationHandler
+        from bot.database.models import User
+
+        # 1. Manual typing Europe/Kiev
+        update_tz = MagicMock()
+        update_tz.effective_chat.id = 7052
+        update_tz.effective_chat.type = "private"
+        update_tz.effective_user.id = 7052
+        msg_mock = MagicMock()
+        msg_mock.text = "Europe/Kiev"
+        msg_mock.reply_text = AsyncMock()
+        update_tz.message = msg_mock
+
+        with patch("bot.handlers.settings.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal):
+            res = await save_custom_timezone(update_tz, MagicMock())
+            self.assertEqual(res, ConversationHandler.END)
+
+            async with self.SessionLocal() as session:
+                db_user = await session.get(User, 7052)
+                self.assertIsNotNone(db_user)
+                self.assertEqual(db_user.settings.get("timezone"), "Europe/Kyiv")
+                self.assertTrue(db_user.settings.get("timezone_selected"))
+
+        # 2. Legacy button callback set_tz_Europe/Kiev also normalizes to Europe/Kyiv
+        update_btn = MagicMock()
+        query_btn = MagicMock()
+        query_btn.data = "set_tz_Europe/Kiev"
+        query_btn.answer = AsyncMock()
+        query_btn.edit_message_text = AsyncMock()
+        update_btn.callback_query = query_btn
+        update_btn.effective_chat.id = 7053
+        update_btn.effective_chat.type = "private"
+        update_btn.effective_user.id = 7053
+
+        with patch("bot.handlers.settings.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal):
+            await set_timezone_btn(update_btn, MagicMock())
+
+            async with self.SessionLocal() as session:
+                db_user_btn = await session.get(User, 7053)
+                self.assertIsNotNone(db_user_btn)
+                self.assertEqual(db_user_btn.settings.get("timezone"), "Europe/Kyiv")
+                self.assertTrue(db_user_btn.settings.get("timezone_selected"))
 
 
 if __name__ == "__main__":

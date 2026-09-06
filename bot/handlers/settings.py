@@ -8,6 +8,7 @@ from sqlalchemy.future import select
 from bot.database.session import AsyncSessionLocal
 from bot.database.models import User, APIKey
 from bot.utils.helpers import get_or_create_user
+from bot.handlers.common import get_user_model_settings, get_effective_timezone, normalize_timezone
 from bot.utils.security import key_manager
 from bot.utils.context import context_manager
 from bot.utils.queue_manager import get_queue_stats, clear_pending_tasks, clear_all_tasks
@@ -50,11 +51,19 @@ async def check_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def update_settings(chat_id, **kwargs):
     async with AsyncSessionLocal() as session:
         obj = await session.get(User, chat_id)
-        if obj:
-            settings = dict(obj.settings or {})
-            settings.update(kwargs)
-            obj.settings = settings
-            await session.commit()
+        if not obj:
+            is_group = chat_id < 0
+            initial_settings = DEFAULT_GROUP_SETTINGS.copy() if is_group else DEFAULT_SETTINGS.copy()
+            obj = User(
+                id=chat_id,
+                settings=initial_settings,
+                system_prompt=initial_settings.get('system_prompt', '')
+            )
+            session.add(obj)
+        settings = dict(obj.settings or {})
+        settings.update(kwargs)
+        obj.settings = settings
+        await session.commit()
 
 async def update_setting(chat_id, key, value):
     await update_settings(chat_id, **{key: value})
@@ -63,7 +72,7 @@ TIMEZONE_ONBOARDING_TEXT = "🌍 Щоб правильно показувати 
 
 def get_timezone_keyboard(include_back: bool = False) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("🇺🇦 Kyiv", callback_data="set_tz_Europe/Kiev")],
+        [InlineKeyboardButton("🇺🇦 Kyiv", callback_data="set_tz_Europe/Kyiv")],
         [InlineKeyboardButton("🇬🇧 London", callback_data="set_tz_Europe/London")],
         [InlineKeyboardButton("🌐 UTC", callback_data="set_tz_UTC")],
         [InlineKeyboardButton("✍️ Інший timezone", callback_data="ask_custom_tz")],
@@ -430,7 +439,7 @@ async def timezone_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         display_tz = "&lt;не обрано&gt;"
     else:
         raw_tz = settings.get('timezone', BOT_TIMEZONE)
-        display_tz = str(raw_tz)
+        display_tz = str(normalize_timezone(raw_tz) or raw_tz)
 
     keyboard = get_timezone_keyboard(include_back=True)
     try: await query.edit_message_text(f"🌍 Часовий пояс: <code>{display_tz}</code>", reply_markup=keyboard, parse_mode='HTML')
@@ -440,13 +449,14 @@ async def set_timezone_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return
     query = update.callback_query
     new_tz = query.data.replace("set_tz_", "")
+    norm_tz = normalize_timezone(new_tz) or new_tz.strip()
     try:
-        zoneinfo.ZoneInfo(new_tz)
+        zoneinfo.ZoneInfo(norm_tz)
     except Exception:
         await query.answer("❌ Невірна зона.", show_alert=True)
         return
-    await update_settings(update.effective_chat.id, timezone=new_tz, timezone_selected=True)
-    await query.answer(f"Встановлено: {new_tz}")
+    await update_settings(update.effective_chat.id, timezone=norm_tz, timezone_selected=True)
+    await query.answer(f"Встановлено: {norm_tz}")
     await timezone_menu(update, context)
 
 # --- PRIVATE ONLY ---
@@ -589,16 +599,17 @@ async def ask_custom_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def save_custom_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return ConversationHandler.END
     tz = update.message.text.strip()
+    norm_tz = normalize_timezone(tz) or tz
     try:
-        zoneinfo.ZoneInfo(tz)
+        zoneinfo.ZoneInfo(norm_tz)
     except Exception:
         await update.message.reply_text(
             "❌ Невірна назва часового поясу IANA. Спробуйте ще раз (наприклад, <code>Europe/Warsaw</code> або <code>America/Toronto</code>):",
             parse_mode='HTML'
         )
         return WAITING_FOR_TIMEZONE
-    await update_settings(update.effective_chat.id, timezone=tz, timezone_selected=True)
-    await update.message.reply_text(f"✅ Встановлено часовий пояс: <code>{tz}</code>", parse_mode='HTML')
+    await update_settings(update.effective_chat.id, timezone=norm_tz, timezone_selected=True)
+    await update.message.reply_text(f"✅ Встановлено часовий пояс: <code>{norm_tz}</code>", parse_mode='HTML')
     return ConversationHandler.END
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -57,11 +57,22 @@ def is_timezone_selected(settings: Optional[dict]) -> bool:
     return bool(settings.get("timezone_selected", False))
 
 
-def _is_valid_iana_tz(tz_name: Any) -> bool:
+def normalize_timezone(tz_name: Any) -> Optional[str]:
+    """Нормалізує застарілі псевдоніми часових поясів (Europe/Kiev -> Europe/Kyiv)."""
     if not isinstance(tz_name, str) or not tz_name.strip():
+        return None
+    val = tz_name.strip()
+    if val == "Europe/Kiev":
+        return "Europe/Kyiv"
+    return val
+
+
+def _is_valid_iana_tz(tz_name: Any) -> bool:
+    norm = normalize_timezone(tz_name)
+    if not norm:
         return False
     try:
-        zoneinfo.ZoneInfo(tz_name.strip())
+        zoneinfo.ZoneInfo(norm)
         return True
     except Exception:
         return False
@@ -76,8 +87,9 @@ async def get_effective_timezone(user_id: Optional[int], chat_id: Optional[int])
     - Не записує нічого в БД, не перезаписує явний UTC і не логує налаштування.
     """
     target_id = chat_id if (chat_id is not None and chat_id < 0) else (user_id if user_id is not None else chat_id)
+    bot_tz = normalize_timezone(BOT_TIMEZONE) or "Europe/Kyiv"
     if target_id is None:
-        return BOT_TIMEZONE.strip() if _is_valid_iana_tz(BOT_TIMEZONE) else "UTC"
+        return bot_tz if _is_valid_iana_tz(bot_tz) else "UTC"
 
     try:
         settings = await get_user_model_settings(target_id)
@@ -85,11 +97,12 @@ async def get_effective_timezone(user_id: Optional[int], chat_id: Optional[int])
         settings = None
 
     raw_tz = settings.get("timezone") if isinstance(settings, dict) else None
-    if _is_valid_iana_tz(raw_tz):
-        return str(raw_tz).strip()
+    norm_tz = normalize_timezone(raw_tz)
+    if _is_valid_iana_tz(norm_tz):
+        return norm_tz
 
-    if _is_valid_iana_tz(BOT_TIMEZONE):
-        return BOT_TIMEZONE.strip()
+    if _is_valid_iana_tz(bot_tz):
+        return bot_tz
     return "UTC"
 
 

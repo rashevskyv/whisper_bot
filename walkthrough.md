@@ -1,4 +1,19 @@
-# Walkthrough: Whisper Bot v2.5.2
+# Walkthrough: Whisper Bot v2.5.3
+
+## Огляд релізу v2.5.3
+
+1. **Канонічний Kyiv**: кнопка timezone picker тепер надсилає `Europe/Kyiv`; бот приймає застарілий `Europe/Kiev`, але одразу зберігає канонічне значення.
+2. **Сумісність із сервером та legacy-даними**: `BOT_TIMEZONE=Europe/Kiev` у середовищі та старі БД-записи автоматично нормалізуються на `Europe/Kyiv` до перевірки `ZoneInfo`, тому host без старого alias не переходить на UTC.
+3. **Надійне збереження onboarding**: вибір timezone створює відсутній `User`-запис із дефолтами перед записом `timezone_selected=True`; наступний приватний AI-запит проходить без повторного picker.
+4. **Версія програми**: `APP_VERSION` піднято до `2.5.3`.
+
+## Верифікація v2.5.3
+
+- За звітом Gemini: focused suite — **167 passed**, повний паралельний suite та `unittest discover` — **469 passed**.
+- Регресії перевіряють точний callback Kyiv, нормалізацію legacy alias навіть якщо host не знає `Europe/Kiev`, збереження picker/custom input та наступний приватний AI-запит.
+- `git diff --check` чистий.
+
+---
 
 ## Огляд релізу v2.5.2
 

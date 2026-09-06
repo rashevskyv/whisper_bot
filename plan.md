@@ -163,3 +163,9 @@
 4. [x] Зберегти незалежні group timezone і workflow адміністратора без нового onboarding для кожного учасника.
 5. [x] Покрити onboarding, legacy users, callback ownership та відсутність AI side effect тестами; підняти `APP_VERSION` до `2.5.2`.
 6. [x] Додатковий scope: надійна обробка stale Telegram callback у списку покупок (`telegram.error.BadRequest` перехоплюється окремо від DB-винятків, без повторного `query.answer` та traceback, з безпечним логуванням safe IDs: `action`, `list_id`, `chat_id`, `user_id`, а fallback `query.answer` при DB-помилках захищено від `BadRequest`).
+
+## Фаза 13 — Канонічний Kyiv timezone picker v2.5.3 (Завершено)
+
+1. [x] Замінити `Europe/Kiev` у callback даних кнопки Kyiv на канонічний IANA ідентифікатор `Europe/Kyiv`.
+2. [x] Регресійно перевірити, що вибір Kyiv і ручний `Europe/Kyiv` зберігають `timezone_selected=True` та розблоковують наступний приватний AI-запит.
+3. [x] Не змінювати group workflow, scheduler або поведінку voice transcription; підняти patch-версію до `2.5.3`.

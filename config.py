@@ -9,8 +9,9 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Kiev")
-APP_VERSION = "2.5.2"
+_raw_bot_timezone = (os.getenv("BOT_TIMEZONE") or "Europe/Kyiv").strip()
+BOT_TIMEZONE = "Europe/Kyiv" if _raw_bot_timezone == "Europe/Kiev" else _raw_bot_timezone
+APP_VERSION = "2.5.3"
 
 ENABLE_VIDEO_REPOST = os.getenv("ENABLE_VIDEO_REPOST", "true").lower() in ("true", "1", "yes")
 ENABLE_VIDEO_REPOST_GROUPS = os.getenv("ENABLE_VIDEO_REPOST_GROUPS", "true").lower() in ("true", "1", "yes")
