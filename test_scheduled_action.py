@@ -961,6 +961,308 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Invalid/Trash_TZ", res.display_text)
         self.assertNotIn("America/New_York", res.display_text)
 
+    # 46. Time clarification: natural short time replies and rejection of invalid values
+    async def test_natural_short_time_replies_item_time_and_reference_time(self):
+        # 1. reference_time reply "в 10" transitions from awaiting_info and saves 10:00
+        draft_ref = await create_action_draft(
+            user_id=1, chat_id=2, action_type="create_scheduled_tasks",
+            payload={
+                "context_type": "medication", "timezone": "Europe/Kiev",
+                "items": [{
+                    "name": "Омега-3", "dosage": "1 капсула",
+                    "relative_to": "сніданок", "offset_minutes": 120,
+                    "reference_time": None, "local_time": None, "days_of_week": [0, 1, 2, 3, 4, 5, 6]
+                }]
+            },
+            missing_fields=["reference_time:0"]
+        )
+        res_ref = await apply_action_draft_reply(draft_ref.id, user_id=1, chat_id=2, reply_text="в 10")
+        self.assertTrue(res_ref.payload["success"])
+        self.assertEqual(res_ref.payload["status"], DRAFT_STATUS_PENDING_CONFIRMATION)
+        d_ref = await get_action_draft(draft_ref.id, 1, 2)
+        self.assertEqual(d_ref.payload["items"][0]["reference_time"], "10:00")
+        self.assertEqual(d_ref.payload["items"][0]["resolved_local_time"], "12:00")
+
+        # 2. item_time reply "10" saves 10:00
+        draft_item = await create_action_draft(
+            user_id=1, chat_id=2, action_type="create_scheduled_tasks",
+            payload={"context_type": "generic", "timezone": "UTC", "items": [{"name": "Task", "local_time": None, "days_of_week": [0]}]},
+            missing_fields=["item_time:0"]
+        )
+        res_item = await apply_action_draft_reply(draft_item.id, user_id=1, chat_id=2, reply_text="10")
+        self.assertTrue(res_item.payload["success"])
+        d_item = await get_action_draft(draft_item.id, 1, 2)
+        self.assertEqual(d_item.payload["items"][0]["local_time"], "10:00")
+
+        # 3. "о 8:30" saves 08:30
+        draft_o = await create_action_draft(
+            user_id=1, chat_id=2, action_type="create_scheduled_tasks",
+            payload={"context_type": "generic", "timezone": "UTC", "items": [{"name": "Task", "local_time": None, "days_of_week": [0]}]},
+            missing_fields=["item_time:0"]
+        )
+        res_o = await apply_action_draft_reply(draft_o.id, user_id=1, chat_id=2, reply_text="о 8:30")
+        self.assertTrue(res_o.payload["success"])
+        d_o = await get_action_draft(draft_o.id, 1, 2)
+        self.assertEqual(d_o.payload["items"][0]["local_time"], "08:30")
+
+        # 4. Existing "08:30" continues to work
+        draft_std = await create_action_draft(
+            user_id=1, chat_id=2, action_type="create_scheduled_tasks",
+            payload={"context_type": "generic", "timezone": "UTC", "items": [{"name": "Task", "local_time": None, "days_of_week": [0]}]},
+            missing_fields=["item_time:0"]
+        )
+        res_std = await apply_action_draft_reply(draft_std.id, user_id=1, chat_id=2, reply_text="08:30")
+        self.assertTrue(res_std.payload["success"])
+        d_std = await get_action_draft(draft_std.id, 1, 2)
+        self.assertEqual(d_std.payload["items"][0]["local_time"], "08:30")
+
+        # 5. Invalid values: 24, 24:00, 12:60, "в десять", "завтра в 10" are rejected without mutating draft
+        invalid_replies = ["24", "24:00", "12:60", "в десять", "завтра в 10"]
+        for bad_reply in invalid_replies:
+            draft_bad = await create_action_draft(
+                user_id=1, chat_id=2, action_type="create_scheduled_tasks",
+                payload={"context_type": "generic", "timezone": "UTC", "items": [{"name": "Task", "local_time": None, "days_of_week": [0]}]},
+                missing_fields=["item_time:0"]
+            )
+            res_bad = await apply_action_draft_reply(draft_bad.id, user_id=1, chat_id=2, reply_text=bad_reply)
+            self.assertFalse(res_bad.payload["success"])
+            self.assertEqual(res_bad.payload["error"], "invalid_item_time")
+            self.assertIn("⚠️ Вкажіть час, наприклад: 10, в 10 або 08:30.", res_bad.display_text)
+            d_bad = await get_action_draft(draft_bad.id, 1, 2)
+            self.assertEqual(d_bad.status, DRAFT_STATUS_AWAITING_INFO)
+            self.assertIsNone(d_bad.payload["items"][0]["local_time"])
+
+    # 47. Timezone confirmation display and scheduler moment preservation
+    async def test_timezone_confirmation_display_and_scheduler_invariance(self):
+        utc_moment_str = "2099-09-05T15:44:00+00:00"
+        expected_utc_dt = datetime.fromisoformat(utc_moment_str)
+
+        # 1. Europe/Kiev: confirmation display contains 18:44 and scheduler receives 15:44 UTC
+        mock_add_kiev = AsyncMock(return_value=111)
+        with patch("bot.ai.tools.scheduler_service.add_reminder", mock_add_kiev):
+            res_kiev = await execute_tool(
+                "schedule_reminder",
+                {"iso_time_utc": utc_moment_str, "text": "Test reminder"},
+                user_id=1,
+                chat_id=2,
+                timezone_name="Europe/Kiev",
+                execute_mutation=True,
+            )
+            self.assertTrue(res_kiev.payload["success"])
+            self.assertIn("18:44", res_kiev.display_text)
+            mock_add_kiev.assert_awaited_once()
+            _, _, _, called_dt = mock_add_kiev.call_args[0]
+            self.assertEqual(called_dt, expected_utc_dt)
+            self.assertEqual(called_dt.tzinfo, timezone.utc)
+
+        # 2. UTC: confirmation display contains 15:44 and scheduler receives 15:44 UTC
+        mock_add_utc = AsyncMock(return_value=222)
+        with patch("bot.ai.tools.scheduler_service.add_reminder", mock_add_utc):
+            res_utc = await execute_tool(
+                "schedule_reminder",
+                {"iso_time_utc": utc_moment_str, "text": "Test reminder"},
+                user_id=1,
+                chat_id=2,
+                timezone_name="UTC",
+                execute_mutation=True,
+            )
+            self.assertTrue(res_utc.payload["success"])
+            self.assertIn("15:44", res_utc.display_text)
+            self.assertNotIn("18:44", res_utc.display_text)
+            mock_add_utc.assert_awaited_once()
+            _, _, _, called_dt_utc = mock_add_utc.call_args[0]
+            self.assertEqual(called_dt_utc, expected_utc_dt)
+            self.assertEqual(called_dt_utc.tzinfo, timezone.utc)
+
+    # 48. Legacy settings fallback and explicit UTC preservation
+    async def test_legacy_settings_fallback_and_explicit_utc(self):
+        from bot.handlers.common import get_user_model_settings
+        from bot.database.models import User
+        from config import BOT_TIMEZONE
+
+        # User with legacy settings (no timezone key)
+        async with self.SessionLocal() as session:
+            legacy_user = User(id=777, username="leg", full_name="Legacy", settings={"language": "uk"})
+            utc_user = User(id=888, username="utc", full_name="UTC User", settings={"language": "uk", "timezone": "UTC"})
+            session.add_all([legacy_user, utc_user])
+            await session.commit()
+
+        with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal):
+            settings_legacy = await get_user_model_settings(777)
+            self.assertEqual(settings_legacy.get("timezone"), BOT_TIMEZONE)
+
+            settings_utc = await get_user_model_settings(888)
+            self.assertEqual(settings_utc.get("timezone"), "UTC")
+
+    # 49. Effective timezone contract: group overrides user, private preserves explicit UTC
+    async def test_get_effective_timezone_contract(self):
+        from bot.handlers.common import get_effective_timezone
+        from bot.database.models import User
+        from config import BOT_TIMEZONE
+
+        async with self.SessionLocal() as session:
+            user = User(id=1001, username="u1001", full_name="User", settings={"timezone": "UTC"})
+            group = User(id=-2001, username="g2001", full_name="Group", settings={"timezone": "Europe/Kiev"})
+            legacy_group = User(id=-2002, username="g2002", full_name="Legacy Group", settings={})
+            bad_group = User(id=-2003, username="g2003", full_name="Bad Group", settings={"timezone": "Invalid/Zone"})
+            bad_user = User(id=1002, username="u1002", full_name="Bad User", settings={"timezone": "Invalid/Zone"})
+            session.add_all([user, group, legacy_group, bad_group, bad_user])
+            await session.commit()
+
+        with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal):
+            # 1. Private chat uses user timezone (UTC preserved)
+            self.assertEqual(await get_effective_timezone(1001, 1001), "UTC")
+
+            # 2. Group chat uses group timezone (Europe/Kiev overrides user's UTC)
+            self.assertEqual(await get_effective_timezone(1001, -2001), "Europe/Kiev")
+
+            # 3. Group with no timezone falls back to BOT_TIMEZONE
+            self.assertEqual(await get_effective_timezone(1001, -2002), BOT_TIMEZONE)
+
+            # 4. Group with invalid timezone falls back to BOT_TIMEZONE
+            self.assertEqual(await get_effective_timezone(1001, -2003), BOT_TIMEZONE)
+
+            # 5. User with invalid timezone in private falls back to BOT_TIMEZONE
+            self.assertEqual(await get_effective_timezone(1002, 1002), BOT_TIMEZONE)
+
+    # 50. Process GPT request passes group timezone to stream_response / provider
+    async def test_process_gpt_request_group_timezone_propagation(self):
+        from bot.handlers.ai import process_gpt_request
+        from bot.database.models import User
+
+        async with self.SessionLocal() as session:
+            user = User(id=1001, username="u1001", full_name="User", settings={"timezone": "UTC"})
+            group = User(id=-2001, username="g2001", full_name="Group", settings={"timezone": "Europe/Kiev"})
+            session.add_all([user, group])
+            await session.commit()
+
+        # Group update
+        update_g = MagicMock()
+        update_g.effective_chat.id = -2001
+        update_g.effective_chat.type = "supergroup"
+        update_g.effective_user.id = 1001
+        update_g.callback_query = None
+        mock_msg_g = MagicMock()
+        mock_msg_g.message_id = 555
+        mock_msg_g.reply_text = AsyncMock(return_value=MagicMock())
+        update_g.message = mock_msg_g
+
+        context = MagicMock()
+        context.bot.send_chat_action = AsyncMock()
+        context.bot.get_chat_member = AsyncMock()
+
+        mock_provider = MagicMock()
+        mock_stream = AsyncMock()
+
+        with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.ai.get_ai_provider", AsyncMock(return_value=mock_provider)), \
+             patch("bot.handlers.ai.stream_response", mock_stream), \
+             patch("bot.handlers.ai.context_manager.get_context", AsyncMock(return_value=[])):
+
+            await process_gpt_request(update_g, context, user_id=1001, manual_text="Test query")
+
+            mock_stream.assert_awaited_once()
+            passed_settings_g = mock_stream.call_args[0][5]
+            self.assertEqual(passed_settings_g["timezone"], "Europe/Kiev")
+
+        # Private update: preserves explicit UTC
+        update_p = MagicMock()
+        update_p.effective_chat.id = 1001
+        update_p.effective_chat.type = "private"
+        update_p.effective_user.id = 1001
+        update_p.callback_query = None
+        mock_msg_p = MagicMock()
+        mock_msg_p.message_id = 556
+        mock_msg_p.reply_text = AsyncMock(return_value=MagicMock())
+        update_p.message = mock_msg_p
+
+        mock_stream.reset_mock()
+        with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.ai.get_ai_provider", AsyncMock(return_value=mock_provider)), \
+             patch("bot.handlers.ai.stream_response", mock_stream), \
+             patch("bot.handlers.ai.context_manager.get_context", AsyncMock(return_value=[])):
+
+            await process_gpt_request(update_p, context, user_id=1001, manual_text="Test private query")
+
+            mock_stream.assert_awaited_once()
+            passed_settings_p = mock_stream.call_args[0][5]
+            self.assertEqual(passed_settings_p["timezone"], "UTC")
+
+    # 51. Draft confirmation passes group timezone to execute_tool
+    async def test_draft_confirmation_group_timezone_propagation(self):
+        from bot.database.models import User, ActionDraft
+        from bot.handlers.callbacks import handle_callback
+        from bot.utils.action_drafts import DRAFT_STATUS_PENDING_CONFIRMATION
+
+        async with self.SessionLocal() as session:
+            user = User(id=1001, username="u1001", full_name="User", settings={"timezone": "UTC"})
+            group = User(id=-2001, username="g2001", full_name="Group", settings={"timezone": "Europe/Kiev"})
+            draft_g = ActionDraft(
+                user_id=1001,
+                chat_id=-2001,
+                action_type="schedule_reminder",
+                payload={"text": "Group test", "iso_time_utc": "2099-01-01T10:00:00+00:00"},
+                status=DRAFT_STATUS_PENDING_CONFIRMATION,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+            draft_p = ActionDraft(
+                user_id=1001,
+                chat_id=1001,
+                action_type="schedule_reminder",
+                payload={"text": "Private test", "iso_time_utc": "2099-01-01T10:00:00+00:00"},
+                status=DRAFT_STATUS_PENDING_CONFIRMATION,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+            session.add_all([user, group, draft_g, draft_p])
+            await session.commit()
+            draft_g_id = draft_g.id
+            draft_p_id = draft_p.id
+
+        # 1. Group confirm
+        update_g = MagicMock()
+        query_g = MagicMock()
+        query_g.data = f"draft:ok:{draft_g_id}"
+        query_g.answer = AsyncMock()
+        query_g.message = MagicMock()
+        query_g.message.edit_text = AsyncMock()
+        update_g.callback_query = query_g
+        update_g.effective_user = MagicMock(id=1001)
+        update_g.effective_chat = MagicMock(id=-2001)
+
+        mock_exec = AsyncMock(return_value=ToolResult(payload={"success": True}, display_text="OK"))
+
+        with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.utils.action_drafts.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.callbacks.execute_tool", mock_exec):
+
+            await handle_callback(update_g, MagicMock())
+
+            mock_exec.assert_awaited_once()
+            called_kwargs_g = mock_exec.call_args[1]
+            self.assertEqual(called_kwargs_g["timezone_name"], "Europe/Kiev")
+
+        # 2. Private confirm
+        update_p = MagicMock()
+        query_p = MagicMock()
+        query_p.data = f"draft:ok:{draft_p_id}"
+        query_p.answer = AsyncMock()
+        query_p.message = MagicMock()
+        query_p.message.edit_text = AsyncMock()
+        update_p.callback_query = query_p
+        update_p.effective_user = MagicMock(id=1001)
+        update_p.effective_chat = MagicMock(id=1001)
+
+        mock_exec.reset_mock()
+        with patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.utils.action_drafts.AsyncSessionLocal", self.SessionLocal), \
+             patch("bot.handlers.callbacks.execute_tool", mock_exec):
+
+            await handle_callback(update_p, MagicMock())
+
+            mock_exec.assert_awaited_once()
+            called_kwargs_p = mock_exec.call_args[1]
+            self.assertEqual(called_kwargs_p["timezone_name"], "UTC")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,6 +26,7 @@ from bot.utils.lists import (
     clear_done_list_items,
     find_existing_user_list,
     get_list_item,
+    delete_user_list,
 )
 
 
@@ -799,3 +800,73 @@ class TestListsConcurrency(unittest.IsolatedAsyncioTestCase):
         # Owned list with no completed items returns 0
         cleared_again = await clear_done_list_items(list_id=ul1.id, chat_id=701, actor_user_id=1)
         self.assertEqual(cleared_again, 0)
+
+    # 26. delete_user_list atomic deletion, chat isolation, and no orphan items
+    async def test_delete_user_list_atomic_and_chat_isolation(self):
+        ul1, _ = await create_or_get_user_list(user_id=1, chat_id=801, list_type=LIST_TYPE_SHOPPING, name="Список 1")
+        ul2, _ = await create_or_get_user_list(user_id=1, chat_id=801, list_type=LIST_TYPE_SHOPPING, name="Список 2")
+        ul_other, _ = await create_or_get_user_list(user_id=2, chat_id=802, list_type=LIST_TYPE_SHOPPING, name="Чужий список")
+
+        await add_list_items(ul1.id, 801, 1, ["Пункт 1.1", "Пункт 1.2"])
+        await add_list_items(ul2.id, 801, 1, ["Пункт 2.1"])
+        await add_list_items(ul_other.id, 802, 2, ["Чужий пункт"])
+
+        # 1. Foreign chat deletion returns False and deletes nothing
+        foreign_del = await delete_user_list(list_id=ul1.id, chat_id=802, actor_user_id=2)
+        self.assertFalse(foreign_del)
+
+        # 2. Non-existent list returns False
+        non_existent_del = await delete_user_list(list_id=99999, chat_id=801, actor_user_id=1)
+        self.assertFalse(non_existent_del)
+
+        # 3. Successful deletion of ul1
+        res = await delete_user_list(list_id=ul1.id, chat_id=801, actor_user_id=1)
+        self.assertTrue(res)
+
+        # 4. Repeated deletion returns False (idempotent)
+        repeated_del = await delete_user_list(list_id=ul1.id, chat_id=801, actor_user_id=1)
+        self.assertFalse(repeated_del)
+
+        # Verify ul1 and its items are gone from DB, no orphan items
+        async with self.SessionLocal() as session:
+            ul1_db = await session.get(UserList, ul1.id)
+            self.assertIsNone(ul1_db)
+            ul1_items_count = await session.scalar(
+                select(func.count(ListItem.id)).where(ListItem.list_id == ul1.id)
+            )
+            self.assertEqual(ul1_items_count, 0)
+
+            # ul2 and its items remain intact
+            ul2_db = await session.get(UserList, ul2.id)
+            self.assertIsNotNone(ul2_db)
+            ul2_items = (await session.scalars(select(ListItem).where(ListItem.list_id == ul2.id))).all()
+            self.assertEqual(len(ul2_items), 1)
+
+            # ul_other and its items in chat 802 remain intact
+            ul_other_db = await session.get(UserList, ul_other.id)
+            self.assertIsNotNone(ul_other_db)
+            other_items = (await session.scalars(select(ListItem).where(ListItem.list_id == ul_other.id))).all()
+            self.assertEqual(len(other_items), 1)
+
+    # 27. delete_user_list argument validation
+    async def test_delete_user_list_validation(self):
+        invalid_cases = [
+            (None, 801, 1),
+            ("1", 801, 1),
+            (True, 801, 1),
+            (0, 801, 1),
+            (-1, 801, 1),
+            (1, None, 1),
+            (1, "801", 1),
+            (1, True, 1),
+            (1, 0, 1),
+            (1, 801, None),
+            (1, 801, "1"),
+            (1, 801, True),
+            (1, 801, 0),
+            (1, 801, -1),
+        ]
+        for lid, cid, aid in invalid_cases:
+            with self.subTest(lid=lid, cid=cid, aid=aid):
+                with self.assertRaises(ValueError):
+                    await delete_user_list(lid, cid, aid)

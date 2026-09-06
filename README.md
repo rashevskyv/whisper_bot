@@ -47,11 +47,12 @@ The bot features **real-time web search**, smart summarization, context memory, 
 - **Action Previews & Clarifications:** Actions that modify schedules or lists require explicit Telegram confirmation ("✅ Confirm" / "❌ Cancel") via preview drafts (`ActionDraft`). If critical details (like dosage or time) are missing, the bot prompts for clarification before enabling confirmation.
 - **Interactive Occurrence Controls:** Scheduled notifications include inline buttons to mark **Done** (✅), **Skip** (⏭), or **Snooze** (⏰ 15m or 30m).
 - **Restart Resilience & Missed Policy:** Schedules, snoozes, and active drafts persist across restarts. Overdue offline occurrences are reconciled and summarized atomically without spamming the chat.
-- **Timezone Aware:** Full IANA timezone support handling local offsets, gaps, and daylight saving transitions seamlessly.
+- **Timezone Aware:** Full IANA timezone support handling local offsets, gaps, and daylight saving transitions seamlessly. Group chats strictly respect the group's configured timezone (preventing author timezones from overriding the group), while private chats preserve explicit UTC or custom preferences, defaulting reliably to `BOT_TIMEZONE`.
+- **Natural Time Parsing:** Clarifications accept short natural answers such as "10", "в 10", "о 8:30", or standard "08:30".
 
 ### 🛒 Interactive Shopping & Task Lists
 - **Named & Chat-Scoped Lists:** Create and manage separate shopping lists (e.g., groceries, hardware) isolated per chat, with an automatic default list.
-- **Natural Language Actions:** Add items in bulk, view list contents, mark items as bought, undo, delete, or clear bought items.
+- **Natural Language Actions:** Add items in bulk, view list contents, mark items as bought, undo, delete individual items, clear bought items, or delete entire shopping lists with confirmation.
 - **Interactive Inline Telegram UI:** Real-time inline keyboard controls let you toggle item status (✅ / ↩️), delete items (🗑), or clear completed items (🧹) directly on list messages.
 - **Group Privacy:** Strict chat isolation ensures items and lists are completely protected against cross-chat exposure.
 

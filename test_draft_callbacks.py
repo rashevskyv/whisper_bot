@@ -302,7 +302,7 @@ class TestDraftCallbacks(unittest.IsolatedAsyncioTestCase):
 
         update, query = make_mock_update(f"draft:ok:{draft.id}", user_id=12, chat_id=24)
         with patch("bot.handlers.callbacks.execute_tool", AsyncMock(return_value=fake_res)) as mock_exec, \
-             patch("bot.handlers.callbacks.get_user_model_settings", AsyncMock(return_value={"timezone": "Europe/Kyiv"})):
+             patch("bot.handlers.callbacks.get_effective_timezone", AsyncMock(return_value="Europe/Kyiv")):
 
             await handle_callback(update, MagicMock())
 
@@ -446,7 +446,7 @@ class TestDraftCallbacks(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(mock_exec.await_count, 1)
 
     async def test_callback_confirm_settings_failure_protected_and_no_leak(self):
-        """Verify get_user_model_settings failure is caught, logs no secret, removes keyboard, and prevents execution."""
+        """Verify get_effective_timezone failure is caught, logs no secret, removes keyboard, and prevents execution."""
         draft = await create_action_draft(
             user_id=70, chat_id=80, action_type="schedule_reminder",
             payload={"text": "Settings fail test", "iso_time_utc": "2026-11-20T15:00:00+00:00"},
@@ -458,7 +458,7 @@ class TestDraftCallbacks(unittest.IsolatedAsyncioTestCase):
         mock_exec = AsyncMock()
 
         update, query = make_mock_update(f"draft:ok:{draft.id}", user_id=70, chat_id=80)
-        with patch("bot.handlers.callbacks.get_user_model_settings", mock_settings), \
+        with patch("bot.handlers.callbacks.get_effective_timezone", mock_settings), \
              patch("bot.handlers.callbacks.execute_tool", mock_exec), \
              self.assertLogs("bot.handlers.callbacks", level="ERROR") as cm:
 

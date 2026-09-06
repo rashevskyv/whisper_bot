@@ -560,3 +560,62 @@ async def clear_done_list_items(
             await asyncio.sleep(0.01 * (attempt + 1))
 
     return None
+
+
+async def delete_user_list(
+    list_id: int,
+    chat_id: int,
+    actor_user_id: int,
+) -> bool:
+    _validate_list_id(list_id)
+    _validate_chat_id(chat_id)
+    _validate_user_id(actor_user_id)
+
+    for attempt in range(5):
+        try:
+            async with AsyncSessionLocal() as session:
+                user_list = await session.get(UserList, list_id)
+                if not user_list or user_list.chat_id != chat_id:
+                    return False
+
+                stmt_items = (
+                    delete(ListItem)
+                    .where(
+                        ListItem.list_id == list_id,
+                        ListItem.list_id.in_(
+                            select(UserList.id).where(
+                                UserList.id == list_id,
+                                UserList.chat_id == chat_id,
+                            )
+                        ),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                await session.execute(stmt_items)
+
+                stmt_list = (
+                    delete(UserList)
+                    .where(
+                        UserList.id == list_id,
+                        UserList.chat_id == chat_id,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                res = await session.execute(stmt_list)
+                if res.rowcount != 1:
+                    await session.rollback()
+                    return False
+
+                await session.commit()
+                logger.info(
+                    "Deleted user list %d in chat %d by actor %d",
+                    list_id, chat_id, actor_user_id,
+                )
+                return True
+
+        except OperationalError:
+            if attempt == 4:
+                raise
+            await asyncio.sleep(0.01 * (attempt + 1))
+
+    return False

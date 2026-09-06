@@ -30,6 +30,7 @@ SUPPORTED_ACTION_TYPES: Set[str] = {
     "set_shopping_item_state",
     "delete_shopping_item",
     "clear_bought_items",
+    "delete_shopping_list",
 }
 
 MAX_DRAFT_TTL_SECONDS: int = 86400  # 24 hours

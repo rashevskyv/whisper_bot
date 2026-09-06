@@ -72,6 +72,7 @@ class TestAITools(unittest.IsolatedAsyncioTestCase):
             "set_shopping_item_state",
             "delete_shopping_item",
             "clear_bought_items",
+            "delete_shopping_list",
         ]
         self.assertEqual(names_no_search, expected_no_search)
 
@@ -81,13 +82,13 @@ class TestAITools(unittest.IsolatedAsyncioTestCase):
 
         # OpenAI wrapper
         openai_no_search = get_openai_tools(allow_search=False)
-        self.assertEqual(len(openai_no_search), 9)
+        self.assertEqual(len(openai_no_search), 10)
         for t in openai_no_search:
             self.assertEqual(t["type"], "function")
             self.assertIn(t["function"]["name"], expected_no_search)
 
         openai_search = get_openai_tools(allow_search=True)
-        self.assertEqual(len(openai_search), 10)
+        self.assertEqual(len(openai_search), 11)
         openai_names = [t["function"]["name"] for t in openai_search]
         self.assertEqual(openai_names, expected_no_search + ["web_search"])
 
@@ -415,14 +416,15 @@ class TestAITools(unittest.IsolatedAsyncioTestCase):
             "set_shopping_item_state",
             "delete_shopping_item",
             "clear_bought_items",
+            "delete_shopping_list",
         ]
         proto_no_search = provider._get_tools_proto(allow_search=False)
-        self.assertEqual(len(proto_no_search.function_declarations), 9)
+        self.assertEqual(len(proto_no_search.function_declarations), 10)
         decl_names_no_search = [d.name for d in proto_no_search.function_declarations]
         self.assertEqual(decl_names_no_search, expected_no_search)
 
         proto_search = provider._get_tools_proto(allow_search=True)
-        self.assertEqual(len(proto_search.function_declarations), 10)
+        self.assertEqual(len(proto_search.function_declarations), 11)
         decl_names_search = [d.name for d in proto_search.function_declarations]
         self.assertEqual(decl_names_search, expected_no_search + ["web_search"])
 

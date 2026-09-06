@@ -599,8 +599,8 @@ class TestTranscriptionRouting(unittest.IsolatedAsyncioTestCase):
 
         cb_data = f"draft:fill:{draft.id}:{msg.id}"
         update, query = make_mock_callback_update(cb_data, user_id=1, chat_id=2)
-        with patch("bot.handlers.callbacks.get_user_model_settings", new_callable=AsyncMock) as mock_s:
-            mock_s.return_value = {"timezone": "UTC"}
+        with patch("bot.handlers.callbacks.get_effective_timezone", new_callable=AsyncMock) as mock_s:
+            mock_s.return_value = "UTC"
             await handle_callback(update, MagicMock())
 
         # Old keyboard removed
@@ -711,7 +711,7 @@ class TestTranscriptionRouting(unittest.IsolatedAsyncioTestCase):
         cb_data = f"draft:fill:{draft.id}:{msg.id}"
         update, query = make_mock_callback_update(cb_data, user_id=1, chat_id=2)
 
-        with patch("bot.handlers.callbacks.get_user_model_settings", side_effect=RuntimeError(secret_marker)), \
+        with patch("bot.handlers.callbacks.get_effective_timezone", side_effect=RuntimeError(secret_marker)), \
              patch("bot.handlers.callbacks.apply_action_draft_reply", wraps=apply_action_draft_reply) as spy_apply, \
              self.assertLogs("bot", level=logging.INFO) as captured:
 
@@ -749,9 +749,9 @@ class TestTranscriptionRouting(unittest.IsolatedAsyncioTestCase):
             await session.refresh(msg)
 
         update, query = make_mock_callback_update(f"draft:fill:{draft.id}:{msg.id}", user_id=1, chat_id=2)
-        with patch("bot.handlers.callbacks.get_user_model_settings", new_callable=AsyncMock) as mock_settings, \
+        with patch("bot.handlers.callbacks.get_effective_timezone", new_callable=AsyncMock) as mock_settings, \
              patch("bot.handlers.callbacks.apply_action_draft_reply", wraps=apply_action_draft_reply) as spy_apply:
-            mock_settings.return_value = {"timezone": "Not/A_Real_Timezone"}
+            mock_settings.return_value = BOT_TIMEZONE
             await handle_callback(update, MagicMock())
 
         self.assertEqual(spy_apply.call_args.kwargs["timezone_name"], BOT_TIMEZONE)

@@ -22,6 +22,7 @@ from bot.ai.tools import (
     SET_SHOPPING_ITEM_STATE_SCHEMA,
     DELETE_SHOPPING_ITEM_SCHEMA,
     CLEAR_BOUGHT_ITEMS_SCHEMA,
+    DELETE_SHOPPING_LIST_SCHEMA,
     SHOPPING_DISPLAY_LIMIT,
 )
 from bot.ai.google_provider import GoogleProvider
@@ -35,6 +36,7 @@ from bot.utils.lists import (
     set_list_item_done,
     get_list_item,
     list_list_items,
+    delete_user_list,
 )
 from bot.utils.action_drafts import (
     get_action_draft,
@@ -90,6 +92,7 @@ class TestShoppingSchemaParity(unittest.IsolatedAsyncioTestCase):
             "set_shopping_item_state",
             "delete_shopping_item",
             "clear_bought_items",
+            "delete_shopping_list",
         ]
         for name in expected_shopping:
             self.assertIn(name, names)
@@ -126,6 +129,7 @@ class TestShoppingSchemaParity(unittest.IsolatedAsyncioTestCase):
             "set_shopping_item_state",
             "delete_shopping_item",
             "clear_bought_items",
+            "delete_shopping_list",
         ]
         provider_files = [
             "bot/ai/openai_provider.py",
@@ -1003,6 +1007,179 @@ class TestShoppingSeniorReviewFollowup(TestShoppingActionsBase):
         self.assertTrue(res_clear.payload["success"])
         self.assertLessEqual(len(res_clear.display_text), SHOPPING_DISPLAY_LIMIT)
         self.assertIn("…", res_clear.display_text)
+
+
+class TestDeleteShoppingList(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        self.SessionLocal = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
+        self.patchers = [
+            patch("bot.utils.lists.AsyncSessionLocal", self.SessionLocal),
+            patch("bot.utils.action_drafts.AsyncSessionLocal", self.SessionLocal),
+        ]
+        for p in self.patchers:
+            p.start()
+
+    async def asyncTearDown(self):
+        for p in self.patchers:
+            p.stop()
+        await self.engine.dispose()
+
+    async def test_01_default_call_creates_pending_draft_and_leaves_db_unchanged(self):
+        ul, _ = await create_or_get_user_list(user_id=1, chat_id=101, list_type=LIST_TYPE_SHOPPING, name="Покупки")
+        await add_list_items(ul.id, 101, 1, ["Хліб", "Молоко"])
+
+        res = await execute_tool("delete_shopping_list", {"list_name": "Покупки"}, user_id=1, chat_id=101, execute_mutation=False)
+        self.assertTrue(res.payload["success"])
+        self.assertEqual(res.payload["status"], DRAFT_STATUS_PENDING_CONFIRMATION)
+        self.assertEqual(res.payload["missing_fields"], [])
+        self.assertEqual(res.payload["action_type"], "delete_shopping_list")
+        self.assertIn("Підтвердження видалення списку", res.display_text)
+        self.assertIn("Покупки", res.display_text)
+        self.assertIn("Увесь список і всі його пункти буде видалено.", res.display_text)
+
+        # Verify DB is untouched
+        items = await list_list_items(ul.id, 101)
+        self.assertEqual(len(items), 2)
+
+    async def test_02_confirmed_execution_deletes_list_and_items_preserves_others(self):
+        # List 1 in chat 101
+        ul1, _ = await create_or_get_user_list(user_id=1, chat_id=101, list_type=LIST_TYPE_SHOPPING, name="Покупки")
+        await add_list_items(ul1.id, 101, 1, ["Яблука", "Банани"])
+
+        # List 2 in same chat 101
+        ul2, _ = await create_or_get_user_list(user_id=1, chat_id=101, list_type=LIST_TYPE_SHOPPING, name="Будматеріали")
+        await add_list_items(ul2.id, 101, 1, ["Цемент"])
+
+        # List in another chat 202
+        ul_other, _ = await create_or_get_user_list(user_id=2, chat_id=202, list_type=LIST_TYPE_SHOPPING, name="Покупки")
+        await add_list_items(ul_other.id, 202, 2, ["Чужий хліб"])
+
+        # Confirmed execution for ul1
+        res = await execute_tool(
+            "delete_shopping_list",
+            {"list_id": ul1.id, "list_name": ul1.name},
+            user_id=1,
+            chat_id=101,
+            execute_mutation=True,
+        )
+        self.assertTrue(res.payload["success"])
+        self.assertEqual(res.payload["list_id"], ul1.id)
+        self.assertIn("🗑 Список «Покупки» та всі його пункти видалено.", res.display_text)
+
+        # ul1 and its items deleted
+        items1 = await list_list_items(ul1.id, 101)
+        self.assertIsNone(items1)
+
+        # ul2 in chat 101 untouched
+        items2 = await list_list_items(ul2.id, 101)
+        self.assertIsNotNone(items2)
+        self.assertEqual(len(items2), 1)
+
+        # ul_other in chat 202 untouched
+        items_other = await list_list_items(ul_other.id, 202)
+        self.assertIsNotNone(items_other)
+        self.assertEqual(len(items_other), 1)
+
+    async def test_03_foreign_or_nonexistent_list_id_returns_same_not_found(self):
+        ul_other, _ = await create_or_get_user_list(user_id=2, chat_id=202, list_type=LIST_TYPE_SHOPPING, name="Чужий")
+
+        # Foreign chat attempt
+        res_foreign = await execute_tool(
+            "delete_shopping_list",
+            {"list_id": ul_other.id},
+            user_id=1,
+            chat_id=101,
+            execute_mutation=True,
+        )
+        self.assertFalse(res_foreign.payload["success"])
+        self.assertEqual(res_foreign.payload["error"], "list_not_found")
+        self.assertEqual(res_foreign.display_text, "❌ Список не знайдено.")
+
+        # Nonexistent list attempt
+        res_nonexistent = await execute_tool(
+            "delete_shopping_list",
+            {"list_id": 99999},
+            user_id=1,
+            chat_id=101,
+            execute_mutation=True,
+        )
+        self.assertFalse(res_nonexistent.payload["success"])
+        self.assertEqual(res_nonexistent.payload["error"], "list_not_found")
+        self.assertEqual(res_nonexistent.display_text, "❌ Список не знайдено.")
+
+    async def test_04_command_without_list_name_targets_default_or_single_list(self):
+        ul, _ = await create_or_get_user_list(user_id=1, chat_id=303, list_type=LIST_TYPE_SHOPPING, name="Покупки")
+        await add_list_items(ul.id, 303, 1, ["Чай"])
+
+        # Default call without list_name
+        res = await execute_tool("delete_shopping_list", {}, user_id=1, chat_id=303, execute_mutation=False)
+        self.assertTrue(res.payload["success"])
+        draft = await get_action_draft(res.draft_id, 1, 303)
+        self.assertEqual(draft.payload["list_id"], ul.id)
+        self.assertEqual(draft.payload["list_name"], "Покупки")
+
+        # Confirm
+        res_exec = await execute_tool(
+            "delete_shopping_list",
+            {"list_id": draft.payload["list_id"], "list_name": draft.payload["list_name"]},
+            user_id=1,
+            chat_id=303,
+            execute_mutation=True,
+        )
+        self.assertTrue(res_exec.payload["success"])
+        self.assertIsNone(await list_list_items(ul.id, 303))
+
+    async def test_05_missing_list_creates_no_list_and_no_draft(self):
+        res = await execute_tool("delete_shopping_list", {"list_name": "Неіснуючий"}, user_id=1, chat_id=404, execute_mutation=False)
+        self.assertFalse(res.payload["success"])
+        self.assertEqual(res.payload["error"], "list_not_found")
+        self.assertEqual(res.display_text, "❌ Список не знайдено.")
+
+        # Verify no draft created
+        active = await get_active_action_draft(1, 404)
+        self.assertIsNone(active)
+
+        # Verify no list created
+        async with self.SessionLocal() as session:
+            lists = (await session.scalars(select(UserList).where(UserList.chat_id == 404))).all()
+            self.assertEqual(len(lists), 0)
+
+    async def test_06_repeated_execution_is_idempotent(self):
+        ul, _ = await create_or_get_user_list(user_id=1, chat_id=505, list_type=LIST_TYPE_SHOPPING, name="Покупки")
+        res1 = await execute_tool("delete_shopping_list", {"list_id": ul.id}, user_id=1, chat_id=505, execute_mutation=True)
+        self.assertTrue(res1.payload["success"])
+
+        # Second call with same list_id
+        res2 = await execute_tool("delete_shopping_list", {"list_id": ul.id}, user_id=1, chat_id=505, execute_mutation=True)
+        self.assertFalse(res2.payload["success"])
+        self.assertEqual(res2.payload["error"], "list_not_found")
+
+    async def test_07_no_sensitive_data_in_logs_and_html_safe_display(self):
+        sensitive_item = "Секретний_пароль_12345"
+        ul, _ = await create_or_get_user_list(user_id=1, chat_id=606, list_type=LIST_TYPE_SHOPPING, name="<Шопінг & Тест>")
+        await add_list_items(ul.id, 606, 1, [sensitive_item])
+
+        # Preview HTML escaping
+        res_draft = await execute_tool("delete_shopping_list", {"list_name": "<Шопінг & Тест>"}, user_id=1, chat_id=606, execute_mutation=False)
+        self.assertIn("&lt;Шопінг &amp; Тест&gt;", res_draft.display_text)
+        self.assertNotIn("<Шопінг & Тест>", res_draft.display_text)
+
+        with self.assertLogs("bot.ai.tools", level="INFO") as cm:
+            res_exec = await execute_tool(
+                "delete_shopping_list",
+                {"list_id": ul.id, "list_name": ul.name},
+                user_id=1,
+                chat_id=606,
+                execute_mutation=True,
+            )
+            self.assertTrue(res_exec.payload["success"])
+            log_output = " ".join(cm.output)
+            self.assertNotIn(sensitive_item, log_output)
+            self.assertNotIn("Traceback", log_output)
+            self.assertNotIn("Exception", log_output)
 
 
 if __name__ == "__main__":

@@ -33,7 +33,7 @@ from bot.utils.action_drafts import (
     DRAFT_STATUS_CANCELLED,
     DRAFT_STATUS_EXPIRED,
 )
-from bot.handlers.common import get_user_model_settings
+from bot.handlers.common import get_effective_timezone
 from bot.utils.scheduled_tasks import (
     transition_task_occurrence_terminal,
     snooze_task_occurrence,
@@ -85,12 +85,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not active_rems:
             await query.message.edit_text("📭 Список нагадувань порожній.")
         else:
-            settings = await get_user_model_settings(user.id)
-            user_tz_str = settings.get('timezone', BOT_TIMEZONE)
-            try: local_tz = zoneinfo.ZoneInfo(user_tz_str)
-            except: local_tz = zoneinfo.ZoneInfo("UTC")
+            effective_tz_str = await get_effective_timezone(user.id, chat_id)
+            try: local_tz = zoneinfo.ZoneInfo(effective_tz_str)
+            except Exception: local_tz = zoneinfo.ZoneInfo("UTC")
 
-            msg = f"<b>📅 Активні нагадування ({user_tz_str}):</b>\n\n"
+            msg = f"<b>📅 Активні нагадування ({effective_tz_str}):</b>\n\n"
             keyboard = []
             days = {"Monday":"Пн","Tuesday":"Вт","Wednesday":"Ср","Thursday":"Чт","Friday":"Пт","Saturday":"Сб","Sunday":"Нд"}
             
@@ -229,22 +228,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.answer()
 
-        user_tz = BOT_TIMEZONE
         try:
-            settings = await get_user_model_settings(user.id)
-            if isinstance(settings, dict) and settings.get("timezone"):
-                tz_val = str(settings["timezone"]).strip()
-                if tz_val:
-                    try:
-                        zoneinfo.ZoneInfo(tz_val)
-                        user_tz = tz_val
-                    except Exception:
-                        user_tz = BOT_TIMEZONE
+            effective_tz = await get_effective_timezone(user.id, chat_id)
         except Exception:
             logger.error(
                 f"Failed to get user settings for clarification: draft_id={draft.id}, user_id={user.id}, chat_id={chat_id}"
             )
-            user_tz = BOT_TIMEZONE
+            effective_tz = BOT_TIMEZONE
 
         try:
             tool_result = await apply_action_draft_reply(
@@ -252,7 +242,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id=user.id,
                 chat_id=chat_id,
                 reply_text=transcription_text,
-                timezone_name=user_tz,
+                timezone_name=effective_tz,
             )
         except Exception:
             logger.error(
@@ -397,14 +387,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tool_result = None
             # ponytail: confirmed is the single execution claim; add a durable outbox only when crash-retry guarantees are required.
             try:
-                settings = await get_user_model_settings(user.id)
-                user_tz_str = settings.get("timezone", BOT_TIMEZONE) if isinstance(settings, dict) else BOT_TIMEZONE
+                effective_tz_str = await get_effective_timezone(user.id, chat_id)
                 tool_result = await execute_tool(
                     confirmed_draft.action_type,
                     dict(confirmed_draft.payload),
                     user_id=user.id,
                     chat_id=chat_id,
-                    timezone_name=user_tz_str,
+                    timezone_name=effective_tz_str,
                     execute_mutation=True,
                 )
             except Exception:

@@ -41,3 +41,15 @@
   - [x] E3 — Telegram callback-и пунктів та наскрізні shopping-flow тести.
 - [x] Покрити voice safety, provider parity, draft lifecycle, scheduler restore/timezone та list isolation тестами.
 - [x] Після приймання оновити README/walkthrough/Graphify, підняти `APP_VERSION` до `2.5.0` і створити focused commit.
+
+## Завершена задача — покращення парсингу часу, видалення списку та timezone defaults v2.5.1
+
+- [x] Дозволити природні короткі відповіді з часом (`10`, `в 10`, `о 10`, `8:30`, `в 8:30`, `о 08:30`) у `_canonicalize_time_str` зі збереженням суворої валідації годин/хвилин.
+- [x] Оновити текст повідомлення про помилку уточнення часу на нейтральний приклад без примусу до суворого HH:MM.
+- [x] Реалізувати `delete_shopping_list` shared tool для повного видалення списку покупок з підтвердженням через ActionDraft.
+- [x] Додати DB-хелпер `delete_user_list` для атомарного видалення пунктів і списку в межах точного `chat_id` без покладання на FK cascade.
+- [x] Додати `'timezone': BOT_TIMEZONE` до `DEFAULT_SETTINGS` та `DEFAULT_GROUP_SETTINGS` у `config.py`.
+- [x] Забезпечити безпечний fallback читання legacy settings до `BOT_TIMEZONE` без перезапису явного `UTC` та без DB-міграції.
+- [x] Усунути хардкод `'Europe/Kiev'` у `timezone_menu` в `bot/handlers/settings.py`.
+- [x] Реалізувати `get_effective_timezone(user_id, chat_id)` у `bot/handlers/common.py` для ізоляції та пріоритету timezone групи над налаштуваннями автора в усіх action і display handlers.
+- [x] Покрити новий функціонал тестами (`test_scheduled_action.py`, `test_lists.py`, `test_shopping_actions.py`, `test_ai_tools.py`, `test_draft_callbacks.py`, `test_draft_routing.py`) та зберегти `APP_VERSION = "2.5.1"`.

@@ -17,7 +17,7 @@ from bot.utils.action_drafts import (
 )
 from bot.ai.tools import apply_action_draft_reply
 from bot.handlers.settings import get_main_menu_keyboard
-from bot.handlers.common import should_respond, get_user_model_settings
+from bot.handlers.common import should_respond, get_user_model_settings, get_effective_timezone
 from bot.handlers.ai import process_gpt_request, build_draft_reply_markup
 from bot.utils.scheduler import scheduler_service
 from config import BOT_TIMEZONE
@@ -144,22 +144,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Failed to check active action draft: user_id={user.id}, chat_id={chat_id}")
         active_draft = None
     if active_draft and active_draft.status == DRAFT_STATUS_AWAITING_INFO:
-        user_tz = BOT_TIMEZONE
         try:
-            settings = await get_user_model_settings(user.id)
-            if isinstance(settings, dict) and settings.get('timezone'):
-                tz_val = str(settings['timezone']).strip()
-                if tz_val:
-                    try:
-                        zoneinfo.ZoneInfo(tz_val)
-                        user_tz = tz_val
-                    except Exception:
-                        user_tz = BOT_TIMEZONE
+            effective_tz = await get_effective_timezone(user.id, chat_id)
         except Exception:
             logger.error(
                 f"Failed to get user settings for clarification: draft_id={active_draft.id}, user_id={user.id}, chat_id={chat_id}"
             )
-            user_tz = BOT_TIMEZONE
+            effective_tz = BOT_TIMEZONE
 
         try:
             result = await apply_action_draft_reply(
@@ -167,7 +158,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id=user.id,
                 chat_id=chat_id,
                 reply_text=text,
-                timezone_name=user_tz,
+                timezone_name=effective_tz,
             )
         except Exception:
             logger.error(
@@ -248,12 +239,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not reminders:
             await update.message.reply_text("📭 Немає активних нагадувань.", quote=True)
             return
-        settings = await get_user_model_settings(user.id)
-        user_tz_str = settings.get('timezone', BOT_TIMEZONE)
-        try: local_tz = zoneinfo.ZoneInfo(user_tz_str)
-        except: local_tz = zoneinfo.ZoneInfo("UTC")
+        effective_tz_str = await get_effective_timezone(user.id, chat_id)
+        try: local_tz = zoneinfo.ZoneInfo(effective_tz_str)
+        except Exception: local_tz = zoneinfo.ZoneInfo("UTC")
         days_map = {"Monday":"Пн","Tuesday":"Вт","Wednesday":"Ср","Thursday":"Чт","Friday":"Пт","Saturday":"Сб","Sunday":"Нд"}
-        msg = f"<b>📅 Активні нагадування ({user_tz_str}):</b>\n\n"
+        msg = f"<b>📅 Активні нагадування ({effective_tz_str}):</b>\n\n"
         keyboard = []
         for rem in reminders:
             t_utc = rem.trigger_time.replace(tzinfo=timezone.utc) if rem.trigger_time.tzinfo is None else rem.trigger_time

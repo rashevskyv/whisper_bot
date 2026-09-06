@@ -11,7 +11,7 @@ from bot.utils.helpers import get_or_create_user
 from bot.utils.security import key_manager
 from bot.utils.context import context_manager
 from bot.utils.queue_manager import get_queue_stats, clear_pending_tasks, clear_all_tasks
-from config import PERSONAS, DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS, ADMIN_IDS, AVAILABLE_MODELS
+from config import PERSONAS, DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS, ADMIN_IDS, AVAILABLE_MODELS, BOT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -407,7 +407,7 @@ async def timezone_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with AsyncSessionLocal() as session:
         obj = await session.get(User, chat_id)
-        current_tz = obj.settings.get('timezone', 'Europe/Kiev') if obj else 'Europe/Kiev'
+        current_tz = (obj.settings or {}).get('timezone', BOT_TIMEZONE) if obj else BOT_TIMEZONE
 
     keyboard = [
         [InlineKeyboardButton("🇺🇦 Kyiv", callback_data="set_tz_Europe/Kiev")],

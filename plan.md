@@ -140,3 +140,17 @@
 1. Медичні рекомендації, взаємодії препаратів, автоматичний вибір дозування та оцінка прихильності — лише нагадування за наданою інструкцією.
 2. Універсальний workflow/DSL, embeddings, vector DB, окрема черга повідомлень, web-панель і синхронізація з календарями — додавати лише після окремої потреби.
 3. Довільні cron-вирази від моделі — модель передає нормалізовані поля, а застосунок будує дозволений trigger сам.
+
+## Фаза 11 — Природні відповіді часу, видалення списку та узгодження timezone defaults v2.5.1 (Завершено)
+
+1. [x] Розширення `_canonicalize_time_str`: підтримка природних відповідей (`10`, `в 10`, `о 10`, `8:30`, `в 8:30`, `о 08:30`) та оновлення тексту помилки уточнення.
+2. [x] Повне видалення списку покупок:
+   - [x] Shared tool `delete_shopping_list` у `bot/ai/tools.py` для всіх провайдерів;
+   - [x] DB helper `delete_user_list` у `bot/utils/lists.py` з атомарним видаленням `ListItem` та `UserList`, chat isolation та retry-логікою;
+   - [x] Підтримка чернетки `ActionDraft` (`pending_confirmation`), HTML-безпечне прев'ю та виконання тільки через confirm callback.
+3. [x] Узгодження timezone defaults:
+   - [x] Додавання `'timezone': BOT_TIMEZONE` до `DEFAULT_SETTINGS` та `DEFAULT_GROUP_SETTINGS` у `config.py`;
+   - [x] Fallback читання legacy-налаштувань до `BOT_TIMEZONE` у `bot/handlers/common.py` зі збереженням явного `UTC`;
+   - [x] Використання `BOT_TIMEZONE` у `timezone_menu` в `bot/handlers/settings.py`;
+   - [x] Реалізація хелпера `get_effective_timezone(user_id, chat_id)` у `bot/handlers/common.py` для гарантованого застосування timezone групи в `process_gpt_request`, уточненнях, підтвердженні дій та списку нагадувань.
+4. [x] Покриття тестами та збереження версії `APP_VERSION = "2.5.1"`.

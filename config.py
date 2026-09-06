@@ -10,7 +10,7 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Kiev")
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 
 ENABLE_VIDEO_REPOST = os.getenv("ENABLE_VIDEO_REPOST", "true").lower() in ("true", "1", "yes")
 ENABLE_VIDEO_REPOST_GROUPS = os.getenv("ENABLE_VIDEO_REPOST_GROUPS", "true").lower() in ("true", "1", "yes")
@@ -137,6 +137,7 @@ DEFAULT_SETTINGS = {
     'context_mode': 'personal',
     'transcription_keywords': [],
     'video_repost': ENABLE_VIDEO_REPOST,
+    'timezone': BOT_TIMEZONE,
 
     'summary_prompt': (
         "Ти — аналітик. Перетвори текст на стислий звіт.\n"
@@ -181,6 +182,7 @@ DEFAULT_GROUP_SETTINGS = {
     'context_mode': 'shared',
     'transcription_keywords': [],
     'video_repost': ENABLE_VIDEO_REPOST_GROUPS,
+    'timezone': BOT_TIMEZONE,
 
     'trigger_mode': 'keywords',
     'auto_transcribe': True,

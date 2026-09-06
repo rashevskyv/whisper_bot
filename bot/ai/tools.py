@@ -33,6 +33,7 @@ from bot.utils.lists import (
     set_list_item_done,
     delete_list_item,
     clear_done_list_items,
+    delete_user_list,
 )
 from config import BOT_TIMEZONE
 
@@ -257,6 +258,27 @@ CLEAR_BOUGHT_ITEMS_SCHEMA: Dict[str, Any] = {
     }
 }
 
+DELETE_SHOPPING_LIST_SCHEMA: Dict[str, Any] = {
+    "name": "delete_shopping_list",
+    "description": (
+        "Delete an entire shopping list and all of its items. "
+        "Use this tool when the user asks to delete the whole shopping list, "
+        "not an individual item (use delete_shopping_item) and not just bought items (use clear_bought_items). "
+        "Call this tool even if list_name is missing. "
+        "The application handles confirmation."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "list_name": {
+                "type": "string",
+                "description": "Optional explicit name of the shopping list to delete."
+            }
+        },
+        "required": []
+    }
+}
+
 def get_tool_definitions(allow_search: bool = True) -> List[Dict[str, Any]]:
     """Повертає список описів дозволених інструментів."""
     tools = [
@@ -269,6 +291,7 @@ def get_tool_definitions(allow_search: bool = True) -> List[Dict[str, Any]]:
         SET_SHOPPING_ITEM_STATE_SCHEMA,
         DELETE_SHOPPING_ITEM_SCHEMA,
         CLEAR_BOUGHT_ITEMS_SCHEMA,
+        DELETE_SHOPPING_LIST_SCHEMA,
     ]
     if allow_search:
         tools.append(WEB_SEARCH_SCHEMA)
@@ -297,11 +320,11 @@ def _canonicalize_time_str(val: Any) -> Optional[str]:
     if not isinstance(val, str):
         return None
     s = val.strip()
-    match = re.fullmatch(r"^(\d{1,2}):(\d{2})$", s)
+    match = re.fullmatch(r"^(?:(?:[во]|об|у|[vo])\s+)?(\d{1,2})(?::(\d{2}))?$", s, re.IGNORECASE)
     if not match:
         return None
     hour = int(match.group(1))
-    minute = int(match.group(2))
+    minute = int(match.group(2)) if match.group(2) is not None else 0
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
     return f"{hour:02d}:{minute:02d}"
@@ -796,6 +819,19 @@ def format_draft_preview_or_question(
             f"Список: <b>{safe_name}</b>\n"
             f"Усі куплені пункти цього списку будуть видалені.\n\n"
             f"⚠️ <i>Потрібне підтвердження для очищення.</i>"
+        )
+
+    elif action_type == "delete_shopping_list":
+        if missing_fields:
+            return "❓ Будь ласка, надайте необхідну інформацію."
+
+        target_name = payload.get("list_name") or DEFAULT_SHOPPING_LIST_NAME
+        safe_name = html.escape(_safe_truncate_raw(target_name, 150))
+        return (
+            f"\n🗑 <b>Підтвердження видалення списку</b>\n"
+            f"Список: <b>{safe_name}</b>\n"
+            f"Увесь список і всі його пункти буде видалено.\n\n"
+            f"⚠️ <i>Потрібне підтвердження для видалення.</i>"
         )
 
     return "⚠️ Невідомий або непідтримуваний тип дії."
@@ -1791,6 +1827,116 @@ async def execute_tool(
             draft_id=draft.id,
         )
 
+    # 11. delete_shopping_list
+    elif name == "delete_shopping_list":
+        if not user_id or not chat_id:
+            return ToolResult(
+                payload={"success": False, "error": "user_id and chat_id are required"},
+                stop=False,
+            )
+
+        if execute_mutation:
+            target_list_id = args.get("list_id")
+            list_name = args.get("list_name") or DEFAULT_SHOPPING_LIST_NAME
+            if (
+                target_list_id is None
+                or not isinstance(target_list_id, int)
+                or isinstance(target_list_id, bool)
+                or target_list_id <= 0
+            ):
+                return ToolResult(
+                    payload={"success": False, "error": "list_not_found"},
+                    display_text="❌ Список не знайдено.",
+                    stop=True,
+                )
+
+            try:
+                deleted = await delete_user_list(target_list_id, chat_id, user_id)
+            except Exception:
+                logger.error(
+                    "Database error in delete_shopping_list mutation for user %d, chat %d",
+                    user_id, chat_id,
+                )
+                return ToolResult(
+                    payload={"success": False, "error": "database_error"},
+                    display_text="❌ Помилка при видаленні списку.",
+                    stop=True,
+                )
+
+            if not deleted:
+                return ToolResult(
+                    payload={"success": False, "error": "list_not_found"},
+                    display_text="❌ Список не знайдено.",
+                    stop=True,
+                )
+
+            safe_name = html.escape(_safe_truncate_raw(list_name, 150))
+            display_text = f"\n🗑 Список «{safe_name}» та всі його пункти видалено."
+
+            logger.info(
+                "Executed delete_shopping_list mutation: user_id=%d, chat_id=%d, list_id=%d",
+                user_id, chat_id, target_list_id,
+            )
+            return ToolResult(
+                payload={"success": True, "list_id": target_list_id},
+                display_text=display_text,
+                stop=True,
+            )
+
+        # Default draft interception mode (execute_mutation=False)
+        clean_name = _clean_optional_string(args.get("list_name"))
+        try:
+            existing = await find_existing_user_list(chat_id, clean_name, LIST_TYPE_SHOPPING)
+            if existing is None:
+                return ToolResult(
+                    payload={"success": False, "error": "list_not_found"},
+                    display_text="❌ Список не знайдено.",
+                    stop=True,
+                )
+
+            draft_payload: Dict[str, Any] = {
+                "list_id": existing.id,
+                "list_name": existing.name,
+            }
+            draft = await create_action_draft(
+                user_id=user_id,
+                chat_id=chat_id,
+                action_type="delete_shopping_list",
+                payload=draft_payload,
+                missing_fields=[],
+                source_message_id=source_message_id,
+            )
+        except Exception:
+            logger.error(
+                "Database error in delete_shopping_list draft preparation for user %d, chat %d",
+                user_id, chat_id,
+            )
+            return ToolResult(
+                payload={"success": False, "error": "database_error"},
+                display_text="⚠️ Не вдалося підготувати дію. Спробуйте ще раз.",
+                stop=True,
+            )
+
+        display_text = format_draft_preview_or_question(
+            action_type="delete_shopping_list",
+            payload=draft.payload,
+            missing_fields=draft.missing_fields,
+            timezone_name=tz_str,
+        )
+
+        return ToolResult(
+            payload={
+                "success": True,
+                "draft_id": draft.id,
+                "action_type": "delete_shopping_list",
+                "status": draft.status,
+                "missing_fields": draft.missing_fields,
+            },
+            display_text=display_text,
+            stop=True,
+            draft_id=draft.id,
+        )
+
     # Unknown tool
     else:
         return ToolResult(
@@ -2116,7 +2262,7 @@ async def apply_action_draft_reply(
                         "missing_fields": list(draft.missing_fields or []),
                         "error": "invalid_item_time",
                     },
-                    display_text="⚠️ Будь ласка, вкажіть коректний час у форматі ГГ:ХХ (наприклад: 08:30).",
+                    display_text="⚠️ Вкажіть час, наприклад: 10, в 10 або 08:30.",
                     stop=True,
                     draft_id=draft.id,
                 )
@@ -2140,7 +2286,7 @@ async def apply_action_draft_reply(
                         "missing_fields": list(draft.missing_fields or []),
                         "error": "invalid_reference_time",
                     },
-                    display_text="⚠️ Будь ласка, вкажіть коректний час у форматі ГГ:ХХ (наприклад: 08:30).",
+                    display_text="⚠️ Вкажіть час, наприклад: 10, в 10 або 08:30.",
                     stop=True,
                     draft_id=draft.id,
                 )

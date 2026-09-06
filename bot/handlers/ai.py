@@ -17,7 +17,7 @@ from bot.utils.lists import (
     get_user_list,
     list_list_items,
 )
-from bot.handlers.common import get_user_model_settings, update_user_language
+from bot.handlers.common import get_user_model_settings, update_user_language, get_effective_timezone
 from config import DEFAULT_SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -201,6 +201,7 @@ async def process_gpt_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     settings = await get_user_model_settings(user_id)
+    settings['timezone'] = await get_effective_timezone(user_id, chat_id)
     settings['user_id'] = user_id
     settings['chat_id'] = chat_id
     settings['source_message_id'] = reply_to_id
