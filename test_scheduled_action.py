@@ -90,6 +90,7 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
             patch("bot.utils.scheduled_tasks.AsyncSessionLocal", self.SessionLocal),
             patch("bot.utils.scheduler.AsyncSessionLocal", self.SessionLocal),
             patch("bot.ai.tools.scheduler_service.add_reminder", new_callable=AsyncMock),
+            patch("bot.handlers.callbacks.get_user_model_settings", AsyncMock(return_value={"timezone": "UTC", "timezone_selected": True})),
         ]
         for p in self.patchers:
             p.start()
@@ -751,7 +752,8 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
             missing_fields=[]
         )
         update, query = make_mock_callback_update(f"draft:ok:{draft.id}", user_id=123, chat_id=456)
-        with patch("bot.ai.tools.scheduler_service.schedule_recurring_task"):
+        with patch("bot.ai.tools.scheduler_service.schedule_recurring_task"), \
+             patch("bot.handlers.callbacks.get_user_model_settings", AsyncMock(return_value={"timezone": "UTC", "timezone_selected": True})):
             await handle_callback(update, MagicMock())
 
         d = await get_action_draft(draft.id, 123, 456)
@@ -773,7 +775,8 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
             missing_fields=[]
         )
         update, query = make_mock_callback_update(f"draft:ok:{draft.id}", user_id=123, chat_id=456)
-        with patch("bot.ai.tools.scheduler_service.schedule_recurring_task") as mock_sched:
+        with patch("bot.ai.tools.scheduler_service.schedule_recurring_task") as mock_sched, \
+             patch("bot.handlers.callbacks.get_user_model_settings", AsyncMock(return_value={"timezone": "UTC", "timezone_selected": True})):
             await handle_callback(update, MagicMock())
             self.assertEqual(mock_sched.call_count, 1)
 
@@ -1131,7 +1134,7 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
         from bot.database.models import User
 
         async with self.SessionLocal() as session:
-            user = User(id=1001, username="u1001", full_name="User", settings={"timezone": "UTC"})
+            user = User(id=1001, username="u1001", full_name="User", settings={"timezone": "UTC", "timezone_selected": True})
             group = User(id=-2001, username="g2001", full_name="Group", settings={"timezone": "Europe/Kiev"})
             session.add_all([user, group])
             await session.commit()
@@ -1262,6 +1265,449 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
             mock_exec.assert_awaited_once()
             called_kwargs_p = mock_exec.call_args[1]
             self.assertEqual(called_kwargs_p["timezone_name"], "UTC")
+
+
+class TestTimezoneOnboardingV252(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        self.SessionLocal = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
+
+        self.patchers = [
+            patch("bot.utils.action_drafts.AsyncSessionLocal", self.SessionLocal),
+            patch("bot.utils.scheduled_tasks.AsyncSessionLocal", self.SessionLocal),
+            patch("bot.utils.scheduler.AsyncSessionLocal", self.SessionLocal),
+            patch("bot.handlers.common.AsyncSessionLocal", self.SessionLocal),
+            patch("bot.handlers.settings.AsyncSessionLocal", self.SessionLocal),
+        ]
+        for p in self.patchers:
+            p.start()
+
+    async def asyncTearDown(self):
+        for p in reversed(self.patchers):
+            p.stop()
+        await self.engine.dispose()
+
+    # 1. A new/legacy private user with timezone=UTC but no timezone_selected is treated as unconfigured
+    async def test_legacy_user_unconfigured(self):
+        from bot.handlers.common import get_user_model_settings, is_timezone_selected
+        from bot.database.models import User
+        async with self.SessionLocal() as session:
+            user = User(id=7001, username="u7001", full_name="User", settings={"timezone": "UTC"})
+            session.add(user)
+            await session.commit()
+
+        settings = await get_user_model_settings(7001)
+        self.assertFalse(is_timezone_selected(settings))
+        self.assertFalse(settings.get("timezone_selected"))
+
+    # 2. /start in private shows timezone onboarding picker when unconfigured; does not show after explicit selection
+    async def test_start_private_onboarding(self):
+        from bot.handlers.commands import start
+        from bot.database.models import User
+        from bot.handlers.settings import TIMEZONE_ONBOARDING_TEXT
+
+        update = MagicMock()
+        update.callback_query = None
+        update.effective_chat.id = 7002
+        update.effective_chat.type = "private"
+        update.effective_user.id = 7002
+        update.effective_user.first_name = "Alex"
+        update.message = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        async with self.SessionLocal() as session:
+            user = User(id=7002, username="u7002", full_name="Alex", settings={"timezone_selected": False})
+            session.add(user)
+            await session.commit()
+
+        with patch("bot.handlers.commands.get_or_create_user", AsyncMock()), \
+             patch("bot.handlers.commands.scheduler_service.get_reminders_count", AsyncMock(return_value=0)):
+            await start(update, MagicMock())
+            sent_texts = [call[0][0] for call in update.message.reply_text.call_args_list]
+            self.assertIn(TIMEZONE_ONBOARDING_TEXT, sent_texts)
+
+        # After selection:
+        async with self.SessionLocal() as session:
+            db_user = await session.get(User, 7002)
+            db_user.settings = {"timezone": "Europe/Kiev", "timezone_selected": True}
+            await session.commit()
+
+        update.message.reply_text.reset_mock()
+        with patch("bot.handlers.commands.get_or_create_user", AsyncMock()), \
+             patch("bot.handlers.commands.scheduler_service.get_reminders_count", AsyncMock(return_value=0)):
+            await start(update, MagicMock())
+            sent_texts = [call[0][0] for call in update.message.reply_text.call_args_list]
+            self.assertNotIn(TIMEZONE_ONBOARDING_TEXT, sent_texts)
+
+    # 3. /start in a group does not show private-user timezone onboarding
+    async def test_start_group_no_onboarding(self):
+        from bot.handlers.commands import start
+        from bot.handlers.settings import TIMEZONE_ONBOARDING_TEXT
+
+        update = MagicMock()
+        update.callback_query = None
+        update.effective_chat.id = -8001
+        update.effective_chat.type = "group"
+        update.effective_user.id = 7003
+        update.effective_user.first_name = "Alex"
+        update.message = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        with patch("bot.handlers.commands.get_or_create_user", AsyncMock()):
+            await start(update, MagicMock())
+            sent_texts = [call[0][0] for call in update.message.reply_text.call_args_list]
+            self.assertNotIn(TIMEZONE_ONBOARDING_TEXT, sent_texts)
+
+    # 4. Private unconfigured process_gpt_request shows picker and gates provider/streaming
+    async def test_process_gpt_request_private_unconfigured_gated(self):
+        from bot.handlers.ai import process_gpt_request
+        from bot.database.models import User
+        from bot.handlers.settings import TIMEZONE_ONBOARDING_TEXT
+
+        async with self.SessionLocal() as session:
+            user = User(id=7004, username="u7004", full_name="User", settings={"timezone": "UTC"})
+            session.add(user)
+            await session.commit()
+
+        update = MagicMock()
+        update.effective_chat.id = 7004
+        update.effective_chat.type = "private"
+        update.effective_user.id = 7004
+        update.callback_query = None
+        mock_msg = MagicMock()
+        mock_msg.reply_text = AsyncMock()
+        update.message = mock_msg
+
+        mock_get_provider = AsyncMock()
+        mock_stream = AsyncMock()
+
+        with patch("bot.handlers.ai.get_ai_provider", mock_get_provider), \
+             patch("bot.handlers.ai.stream_response", mock_stream):
+            await process_gpt_request(update, MagicMock(), user_id=7004, manual_text="Нагадай через 5 хв")
+            mock_get_provider.assert_not_called()
+            mock_stream.assert_not_called()
+            mock_msg.reply_text.assert_called_once()
+            self.assertEqual(mock_msg.reply_text.call_args[0][0], TIMEZONE_ONBOARDING_TEXT)
+
+    # 5. After selecting Europe/Kiev, timezone_selected=True is persisted and private AI request proceeds
+    async def test_select_europe_kiev_persists_and_unblocks_ai(self):
+        from bot.handlers.settings import set_timezone_btn
+        from bot.handlers.ai import process_gpt_request
+        from bot.database.models import User
+
+        async with self.SessionLocal() as session:
+            user = User(id=7005, username="u7005", full_name="User", settings={})
+            session.add(user)
+            await session.commit()
+
+        update_btn = MagicMock()
+        query_btn = MagicMock()
+        query_btn.data = "set_tz_Europe/Kiev"
+        query_btn.answer = AsyncMock()
+        query_btn.edit_message_text = AsyncMock()
+        update_btn.callback_query = query_btn
+        update_btn.effective_chat.id = 7005
+        update_btn.effective_chat.type = "private"
+        update_btn.effective_user.id = 7005
+
+        await set_timezone_btn(update_btn, MagicMock())
+
+        async with self.SessionLocal() as session:
+            db_user = await session.get(User, 7005)
+            self.assertEqual(db_user.settings.get("timezone"), "Europe/Kiev")
+            self.assertTrue(db_user.settings.get("timezone_selected"))
+
+        # Subsequent private AI request proceeds
+        update_ai = MagicMock()
+        update_ai.effective_chat.id = 7005
+        update_ai.effective_chat.type = "private"
+        update_ai.effective_user.id = 7005
+        update_ai.callback_query = None
+        mock_msg = MagicMock()
+        mock_msg.message_id = 901
+        mock_msg.reply_text = AsyncMock(return_value=MagicMock())
+        update_ai.message = mock_msg
+
+        mock_provider = MagicMock()
+        mock_stream = AsyncMock()
+        context_ai = MagicMock()
+        context_ai.bot.send_chat_action = AsyncMock()
+        with patch("bot.handlers.ai.get_ai_provider", AsyncMock(return_value=mock_provider)), \
+             patch("bot.handlers.ai.stream_response", mock_stream), \
+             patch("bot.handlers.ai.context_manager.get_context", AsyncMock(return_value=[])):
+            await process_gpt_request(update_ai, context_ai, user_id=7005, manual_text="Привіт")
+            mock_stream.assert_awaited_once()
+            passed_settings = mock_stream.call_args[0][5]
+            self.assertEqual(passed_settings["timezone"], "Europe/Kiev")
+
+    # 6. Explicit selected UTC remains UTC and is not overwritten by BOT_TIMEZONE
+    async def test_explicit_utc_preserved(self):
+        from bot.handlers.settings import set_timezone_btn
+        from bot.handlers.common import get_effective_timezone
+        from bot.database.models import User
+
+        async with self.SessionLocal() as session:
+            user = User(id=7006, username="u7006", full_name="User", settings={})
+            session.add(user)
+            await session.commit()
+
+        update_btn = MagicMock()
+        query_btn = MagicMock()
+        query_btn.data = "set_tz_UTC"
+        query_btn.answer = AsyncMock()
+        query_btn.edit_message_text = AsyncMock()
+        update_btn.callback_query = query_btn
+        update_btn.effective_chat.id = 7006
+        update_btn.effective_chat.type = "private"
+        update_btn.effective_user.id = 7006
+
+        await set_timezone_btn(update_btn, MagicMock())
+
+        async with self.SessionLocal() as session:
+            db_user = await session.get(User, 7006)
+            self.assertEqual(db_user.settings.get("timezone"), "UTC")
+            self.assertTrue(db_user.settings.get("timezone_selected"))
+
+        eff_tz = await get_effective_timezone(7006, 7006)
+        self.assertEqual(eff_tz, "UTC")
+
+    # 7. Normal timezone menu displays truthful <не обрано> label for unconfigured private user
+    async def test_timezone_menu_displays_unconfigured_label(self):
+        from bot.handlers.settings import timezone_menu
+        from bot.database.models import User
+
+        async with self.SessionLocal() as session:
+            user = User(id=7007, username="u7007", full_name="User", settings={"timezone": "Europe/Kiev"})
+            session.add(user)
+            await session.commit()
+
+        update = MagicMock()
+        query = MagicMock()
+        query.edit_message_text = AsyncMock()
+        update.callback_query = query
+        update.effective_chat.id = 7007
+        update.effective_chat.type = "private"
+        update.effective_user.id = 7007
+
+        await timezone_menu(update, MagicMock())
+        text = query.edit_message_text.call_args[0][0]
+        self.assertIn("&lt;не обрано&gt;", text)
+
+    # 8. Valid custom timezone persists marker; invalid custom timezone leaves marker false
+    async def test_custom_timezone_validation(self):
+        from bot.handlers.settings import save_custom_timezone, WAITING_FOR_TIMEZONE
+        from telegram.ext import ConversationHandler
+        from bot.database.models import User
+
+        async with self.SessionLocal() as session:
+            user = User(id=7008, username="u7008", full_name="User", settings={"timezone_selected": False})
+            session.add(user)
+            await session.commit()
+
+        update = MagicMock()
+        update.effective_chat.id = 7008
+        update.effective_chat.type = "private"
+        update.effective_user.id = 7008
+        update.message = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        # 1. Invalid
+        update.message.text = "Invalid/Zone_Foo"
+        res = await save_custom_timezone(update, MagicMock())
+        self.assertEqual(res, WAITING_FOR_TIMEZONE)
+
+        async with self.SessionLocal() as session:
+            db_user = await session.get(User, 7008)
+            self.assertFalse(db_user.settings.get("timezone_selected"))
+
+        # 2. Valid
+        update.message.text = "Europe/Warsaw"
+        res = await save_custom_timezone(update, MagicMock())
+        self.assertEqual(res, ConversationHandler.END)
+
+        async with self.SessionLocal() as session:
+            db_user = await session.get(User, 7008)
+            self.assertEqual(db_user.settings.get("timezone"), "Europe/Warsaw")
+            self.assertTrue(db_user.settings.get("timezone_selected"))
+
+    # 9. Private unconfigured schedule draft: text clarification, draft:fill, draft:ok are guarded
+    async def test_private_unconfigured_schedule_draft_guarded(self):
+        from bot.handlers.text import handle_text
+        from bot.handlers.callbacks import handle_callback
+        from bot.utils.action_drafts import (
+            create_action_draft,
+            get_action_draft,
+            DRAFT_STATUS_AWAITING_INFO,
+            DRAFT_STATUS_PENDING_CONFIRMATION
+        )
+        from bot.handlers.settings import TIMEZONE_ONBOARDING_TEXT
+
+        # 1. Text clarification guarded
+        draft = await create_action_draft(
+            user_id=7009, chat_id=7009, action_type="schedule_reminder",
+            payload={}, missing_fields=["text", "iso_time_utc"]
+        )
+        update_t = MagicMock()
+        update_t.effective_chat.id = 7009
+        update_t.effective_chat.type = "private"
+        update_t.effective_user.id = 7009
+        msg_t = MagicMock()
+        msg_t.text = "Dentist"
+        msg_t.reply_text = AsyncMock()
+        update_t.message = msg_t
+
+        with patch("bot.handlers.text.get_user_model_settings", AsyncMock(return_value={"timezone_selected": False})), \
+             patch("bot.ai.tools.apply_action_draft_reply") as mock_apply:
+            await handle_text(update_t, MagicMock())
+            mock_apply.assert_not_called()
+            msg_t.reply_text.assert_called_once()
+            self.assertEqual(msg_t.reply_text.call_args[0][0], TIMEZONE_ONBOARDING_TEXT)
+
+        d1 = await get_action_draft(draft.id, 7009, 7009)
+        self.assertEqual(d1.status, DRAFT_STATUS_AWAITING_INFO)
+
+        # 2. Voice draft:fill guarded
+        update_fill = MagicMock()
+        query_fill = MagicMock()
+        query_fill.data = f"draft:fill:{draft.id}:1"
+        query_fill.answer = AsyncMock()
+        query_fill.message = MagicMock()
+        query_fill.message.reply_text = AsyncMock()
+        query_fill.message.edit_reply_markup = AsyncMock()
+        update_fill.callback_query = query_fill
+        update_fill.effective_chat.id = 7009
+        update_fill.effective_chat.type = "private"
+        update_fill.effective_user.id = 7009
+
+        with patch("bot.handlers.callbacks.get_user_model_settings", AsyncMock(return_value={"timezone_selected": False})), \
+             patch("bot.handlers.callbacks.context_manager.get_transcription_by_id", AsyncMock(return_value="tomorrow at 10")):
+            await handle_callback(update_fill, MagicMock())
+            query_fill.message.edit_reply_markup.assert_not_called()
+            query_fill.message.reply_text.assert_called_once()
+            self.assertEqual(query_fill.message.reply_text.call_args[0][0], TIMEZONE_ONBOARDING_TEXT)
+
+        # 3. Confirmation guarded
+        draft_p = await create_action_draft(
+            user_id=7009, chat_id=7009, action_type="create_scheduled_tasks",
+            payload={"context_type": "generic", "timezone": "UTC", "items": [{"name": "Med", "local_time": "08:00", "days_of_week": [0]}]},
+            missing_fields=[]
+        )
+        update_ok = MagicMock()
+        query_ok = MagicMock()
+        query_ok.data = f"draft:ok:{draft_p.id}"
+        query_ok.answer = AsyncMock()
+        query_ok.message = MagicMock()
+        query_ok.message.reply_text = AsyncMock()
+        query_ok.message.edit_text = AsyncMock()
+        update_ok.callback_query = query_ok
+        update_ok.effective_chat.id = 7009
+        update_ok.effective_chat.type = "private"
+        update_ok.effective_user.id = 7009
+
+        with patch("bot.handlers.callbacks.get_user_model_settings", AsyncMock(return_value={"timezone_selected": False})), \
+             patch("bot.handlers.callbacks.execute_tool") as mock_exec:
+            await handle_callback(update_ok, MagicMock())
+            mock_exec.assert_not_called()
+            query_ok.message.edit_text.assert_not_called()
+            query_ok.message.reply_text.assert_called_once()
+            self.assertEqual(query_ok.message.reply_text.call_args[0][0], TIMEZONE_ONBOARDING_TEXT)
+
+        d2 = await get_action_draft(draft_p.id, 7009, 7009)
+        self.assertEqual(d2.status, DRAFT_STATUS_PENDING_CONFIRMATION)
+
+    # 10. A shopping-list draft remains usable when personal timezone is unconfigured
+    async def test_shopping_list_draft_unblocked_when_timezone_unconfigured(self):
+        from bot.handlers.callbacks import handle_callback
+        from bot.utils.action_drafts import create_action_draft, get_action_draft, DRAFT_STATUS_CONFIRMED
+        from bot.ai.tools import ToolResult
+
+        draft_shop = await create_action_draft(
+            user_id=7010, chat_id=7010, action_type="delete_shopping_list",
+            payload={"list_name": "Покупки"},
+            missing_fields=[]
+        )
+        update_shop = MagicMock()
+        query_shop = MagicMock()
+        query_shop.data = f"draft:ok:{draft_shop.id}"
+        query_shop.answer = AsyncMock()
+        query_shop.message = MagicMock()
+        query_shop.message.edit_text = AsyncMock()
+        update_shop.callback_query = query_shop
+        update_shop.effective_chat.id = 7010
+        update_shop.effective_chat.type = "private"
+        update_shop.effective_user.id = 7010
+
+        fake_res = ToolResult(payload={"success": True}, display_text="Deleted", stop=True)
+        with patch("bot.handlers.callbacks.get_user_model_settings", AsyncMock(return_value={"timezone_selected": False})), \
+             patch("bot.handlers.callbacks.execute_tool", AsyncMock(return_value=fake_res)) as mock_exec:
+            await handle_callback(update_shop, MagicMock())
+            mock_exec.assert_awaited_once()
+
+        d = await get_action_draft(draft_shop.id, 7010, 7010)
+        self.assertEqual(d.status, DRAFT_STATUS_CONFIRMED)
+
+    # 11. Group chat has no private onboarding gate
+    async def test_group_chat_no_onboarding_gate(self):
+        from bot.handlers.ai import process_gpt_request
+        from bot.database.models import User
+
+        async with self.SessionLocal() as session:
+            user = User(id=7011, username="u7011", full_name="User", settings={"timezone": "UTC", "timezone_selected": False})
+            group = User(id=-8002, username="g8002", full_name="Group", settings={"timezone": "Europe/Kiev"})
+            session.add_all([user, group])
+            await session.commit()
+
+        update_g = MagicMock()
+        update_g.effective_chat.id = -8002
+        update_g.effective_chat.type = "supergroup"
+        update_g.effective_user.id = 7011
+        update_g.callback_query = None
+        mock_msg_g = MagicMock()
+        mock_msg_g.message_id = 991
+        mock_msg_g.reply_text = AsyncMock(return_value=MagicMock())
+        update_g.message = mock_msg_g
+
+        context = MagicMock()
+        context.bot.send_chat_action = AsyncMock()
+        context.bot.get_chat_member = AsyncMock()
+        mock_provider = MagicMock()
+        mock_stream = AsyncMock()
+
+        with patch("bot.handlers.ai.get_ai_provider", AsyncMock(return_value=mock_provider)), \
+             patch("bot.handlers.ai.stream_response", mock_stream), \
+             patch("bot.handlers.ai.context_manager.get_context", AsyncMock(return_value=[])):
+            await process_gpt_request(update_g, context, user_id=7011, manual_text="Group query")
+            mock_stream.assert_awaited_once()
+            passed_settings_g = mock_stream.call_args[0][5]
+            self.assertEqual(passed_settings_g["timezone"], "Europe/Kiev")
+
+    # 12. Existing transcription regression: voice instruction callback is gated before AI
+    async def test_transcription_voice_instruction_gated(self):
+        from bot.handlers.callbacks import handle_callback
+        from bot.handlers.settings import TIMEZONE_ONBOARDING_TEXT
+
+        update = MagicMock()
+        query = MagicMock()
+        query.data = "run_gpt:12345"
+        query.answer = AsyncMock()
+        query.message = MagicMock()
+        query.message.reply_text = AsyncMock()
+        query.message.edit_reply_markup = AsyncMock()
+        update.callback_query = query
+        update.effective_chat.id = 7012
+        update.effective_chat.type = "private"
+        update.effective_user.id = 7012
+
+        with patch("bot.handlers.ai.get_user_model_settings", AsyncMock(return_value={"timezone_selected": False})), \
+             patch("bot.handlers.callbacks.context_manager.get_transcription_by_id", AsyncMock(return_value="text")), \
+             patch("bot.handlers.callbacks.context_manager.save_message", AsyncMock()), \
+             patch("bot.handlers.ai.get_ai_provider") as mock_get_provider:
+            await handle_callback(update, MagicMock())
+            mock_get_provider.assert_not_called()
+            query.message.reply_text.assert_called_once()
+            self.assertEqual(query.message.reply_text.call_args[0][0], TIMEZONE_ONBOARDING_TEXT)
 
 
 if __name__ == "__main__":

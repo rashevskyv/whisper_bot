@@ -49,6 +49,7 @@ from bot.utils.action_drafts import (
     DRAFT_STATUS_PENDING_CONFIRMATION,
 )
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 
 
 def make_mock_update(callback_data: str, user_id: int = 123, chat_id: int = 456, message_id: int = 999):
@@ -969,6 +970,54 @@ class TestListFailureAndRaceBehavior(TestListCallbacksBase):
 
         query.answer.assert_awaited_with("ℹ️ Пункт уже видалено або не знайдено.", show_alert=True)
         query.message.edit_text.assert_awaited_once()
+
+    # 55. Stale/expired callback BadRequest from query.answer is handled safely without second answer, retry, traceback or DB error label.
+    async def test_55_stale_callback_bad_request_handled_safely(self):
+        ul, _ = await create_or_get_user_list(1, 100, LIST_TYPE_SHOPPING, "Покупки")
+        items = await add_list_items(ul.id, 100, 1, ["Секретний товар"])
+        item = items[0]
+
+        update, query = make_mock_update(f"list:done:{ul.id}:{item.id}", user_id=1, chat_id=100)
+        query.answer.side_effect = BadRequest("Query is too old and response timeout expired or query id is invalid")
+        context = MagicMock()
+
+        cb_logger = logging.getLogger("bot.handlers.callbacks")
+        captured_logs = []
+        class LogCapturer(logging.Handler):
+            def emit(self, record):
+                captured_logs.append(self.format(record))
+        handler = LogCapturer()
+        cb_logger.addHandler(handler)
+
+        try:
+            with patch("bot.handlers.callbacks.set_list_item_done", AsyncMock(wraps=set_list_item_done)) as mock_set_done:
+                # 1. Handler does not raise exception outside
+                await handle_callback(update, context)
+
+                # 2. Does not attempt to answer callback a second time
+                self.assertEqual(query.answer.call_count, 1)
+
+                # 3. DB helper is not retried (called exactly once)
+                mock_set_done.assert_awaited_once()
+
+            # Message editing should not have been attempted
+            query.message.edit_text.assert_not_awaited()
+
+            joined_logs = "\n".join(captured_logs)
+            # 4. Log does not contain exception string, traceback, item text, list name, or DB error
+            self.assertNotIn("Query is too old", joined_logs)
+            self.assertNotIn("Traceback", joined_logs)
+            self.assertNotIn("Секретний товар", joined_logs)
+            self.assertNotIn("Покупки", joined_logs)
+            self.assertNotIn("DB error", joined_logs)
+
+            # 5. Log contains safe IDs
+            self.assertIn("action=done", joined_logs)
+            self.assertIn(f"list_id={ul.id}", joined_logs)
+            self.assertIn("chat_id=100", joined_logs)
+            self.assertIn("user_id=1", joined_logs)
+        finally:
+            cb_logger.removeHandler(handler)
 
 
 class TestListConcurrencyWAL(unittest.IsolatedAsyncioTestCase):

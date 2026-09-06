@@ -154,3 +154,12 @@
    - [x] Використання `BOT_TIMEZONE` у `timezone_menu` в `bot/handlers/settings.py`;
    - [x] Реалізація хелпера `get_effective_timezone(user_id, chat_id)` у `bot/handlers/common.py` для гарантованого застосування timezone групи в `process_gpt_request`, уточненнях, підтвердженні дій та списку нагадувань.
 4. [x] Покриття тестами та збереження версії `APP_VERSION = "2.5.1"`.
+
+## Фаза 12 — Явний timezone onboarding для приватних чатів v2.5.2 (Завершено)
+
+1. [x] Зберігати окремий факт явного вибору timezone, не вважати server default вибором користувача.
+2. [x] Показувати приватному користувачу короткий timezone picker при `/start` та перед першим AI-запитом, якщо timezone ще не обрано.
+3. [x] Не викликати AI або інструменти розкладу в приватному чаті, доки користувач не вибере timezone.
+4. [x] Зберегти незалежні group timezone і workflow адміністратора без нового onboarding для кожного учасника.
+5. [x] Покрити onboarding, legacy users, callback ownership та відсутність AI side effect тестами; підняти `APP_VERSION` до `2.5.2`.
+6. [x] Додатковий scope: надійна обробка stale Telegram callback у списку покупок (`telegram.error.BadRequest` перехоплюється окремо від DB-винятків, без повторного `query.answer` та traceback, з безпечним логуванням safe IDs: `action`, `list_id`, `chat_id`, `user_id`, а fallback `query.answer` при DB-помилках захищено від `BadRequest`).

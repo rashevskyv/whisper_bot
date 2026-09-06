@@ -16,8 +16,8 @@ from bot.utils.action_drafts import (
     DRAFT_STATUS_AWAITING_INFO,
 )
 from bot.ai.tools import apply_action_draft_reply
-from bot.handlers.settings import get_main_menu_keyboard
-from bot.handlers.common import should_respond, get_user_model_settings, get_effective_timezone
+from bot.handlers.settings import get_main_menu_keyboard, TIMEZONE_ONBOARDING_TEXT, get_timezone_keyboard
+from bot.handlers.common import should_respond, get_user_model_settings, get_effective_timezone, is_timezone_selected
 from bot.handlers.ai import process_gpt_request, build_draft_reply_markup
 from bot.utils.scheduler import scheduler_service
 from config import BOT_TIMEZONE
@@ -144,6 +144,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Failed to check active action draft: user_id={user.id}, chat_id={chat_id}")
         active_draft = None
     if active_draft and active_draft.status == DRAFT_STATUS_AWAITING_INFO:
+        if is_private and active_draft.action_type in ("schedule_reminder", "create_scheduled_tasks"):
+            user_settings = await get_user_model_settings(user.id)
+            if not is_timezone_selected(user_settings):
+                await message.reply_text(
+                    TIMEZONE_ONBOARDING_TEXT,
+                    reply_markup=get_timezone_keyboard(include_back=False),
+                    quote=True,
+                )
+                return
+
         try:
             effective_tz = await get_effective_timezone(user.id, chat_id)
         except Exception:

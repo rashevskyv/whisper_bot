@@ -41,8 +41,20 @@ async def get_user_model_settings(user_id: int):
         if 'trigger_mode' not in settings: settings['trigger_mode'] = default.get('trigger_mode', 'keywords')
         if 'video_repost' not in settings: settings['video_repost'] = default.get('video_repost', True)
         if 'timezone' not in settings: settings['timezone'] = default.get('timezone', BOT_TIMEZONE)
+        if user_id > 0:
+            if 'timezone_selected' not in settings:
+                settings['timezone_selected'] = False
+            else:
+                settings['timezone_selected'] = bool(settings['timezone_selected'])
 
         return settings
+
+
+def is_timezone_selected(settings: Optional[dict]) -> bool:
+    """Перевіряє, чи було явно обрано часовий пояс користувачем у приватних налаштуваннях."""
+    if not isinstance(settings, dict):
+        return False
+    return bool(settings.get("timezone_selected", False))
 
 
 def _is_valid_iana_tz(tz_name: Any) -> bool:

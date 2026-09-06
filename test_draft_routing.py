@@ -273,8 +273,12 @@ class TestTextHandlerRouting(unittest.IsolatedAsyncioTestCase):
 
         self.drafts_patcher = patch("bot.utils.action_drafts.AsyncSessionLocal", self.SessionLocal)
         self.drafts_patcher.start()
+        self.settings_patcher = patch("bot.handlers.text.get_user_model_settings", new_callable=AsyncMock)
+        self.mock_settings = self.settings_patcher.start()
+        self.mock_settings.return_value = {"timezone": "Europe/Kiev", "timezone_selected": True}
 
     async def asyncTearDown(self):
+        self.settings_patcher.stop()
         self.drafts_patcher.stop()
         await self.engine.dispose()
 
@@ -322,7 +326,7 @@ class TestTextHandlerRouting(unittest.IsolatedAsyncioTestCase):
         )
         update, message = make_mock_text_update("2028-12-01 10:00:00", user_id=10, chat_id=20)
         with patch("bot.handlers.text.get_user_model_settings", new_callable=AsyncMock) as mock_settings:
-            mock_settings.return_value = {"timezone": "UTC"}
+            mock_settings.return_value = {"timezone": "UTC", "timezone_selected": True}
             await handle_text(update, MagicMock())
 
         markup = message.reply_text.call_args[1].get("reply_markup")
@@ -436,10 +440,14 @@ class TestTranscriptionRouting(unittest.IsolatedAsyncioTestCase):
 
         self.drafts_patcher = patch("bot.utils.action_drafts.AsyncSessionLocal", self.SessionLocal)
         self.context_patcher = patch("bot.utils.context.AsyncSessionLocal", self.SessionLocal)
+        self.settings_patcher = patch("bot.handlers.callbacks.get_user_model_settings", new_callable=AsyncMock)
         self.drafts_patcher.start()
         self.context_patcher.start()
+        self.mock_settings = self.settings_patcher.start()
+        self.mock_settings.return_value = {"timezone": "Europe/Kiev", "timezone_selected": True}
 
     async def asyncTearDown(self):
+        self.settings_patcher.stop()
         self.drafts_patcher.stop()
         self.context_patcher.stop()
         await self.engine.dispose()
@@ -765,7 +773,7 @@ class TestTranscriptionRouting(unittest.IsolatedAsyncioTestCase):
         update, _ = make_mock_text_update("2028-11-20 15:30:00", user_id=10, chat_id=20)
         with patch("bot.handlers.text.get_user_model_settings", new_callable=AsyncMock) as mock_settings, \
              patch("bot.handlers.text.apply_action_draft_reply", wraps=apply_action_draft_reply) as spy_apply:
-            mock_settings.return_value = {"timezone": "Not/A_Real_Timezone"}
+            mock_settings.return_value = {"timezone": "Not/A_Real_Timezone", "timezone_selected": True}
             await handle_text(update, MagicMock())
 
         self.assertEqual(spy_apply.call_args.kwargs["timezone_name"], BOT_TIMEZONE)
@@ -857,7 +865,7 @@ class TestEndToEndRegression(unittest.IsolatedAsyncioTestCase):
         # 2. User clarifies via text message
         update, message = make_mock_text_update("2028-12-31 18:00:00", user_id=10, chat_id=20)
         with patch("bot.handlers.text.get_user_model_settings", new_callable=AsyncMock) as mock_s:
-            mock_s.return_value = {"timezone": "UTC"}
+            mock_s.return_value = {"timezone": "UTC", "timezone_selected": True}
             await handle_text(update, MagicMock())
 
         # Verify draft became pending_confirmation
@@ -868,7 +876,8 @@ class TestEndToEndRegression(unittest.IsolatedAsyncioTestCase):
         # 3. User clicks Confirm button (draft:ok:<same_id>)
         cb_ok = f"draft:ok:{draft.id}"
         update_cb, query_cb = make_mock_callback_update(cb_ok, user_id=10, chat_id=20)
-        with patch("bot.utils.scheduler.scheduler_service.add_reminder", new_callable=AsyncMock, return_value=101) as mock_add:
+        with patch("bot.utils.scheduler.scheduler_service.add_reminder", new_callable=AsyncMock, return_value=101) as mock_add, \
+             patch("bot.handlers.callbacks.get_user_model_settings", AsyncMock(return_value={"timezone": "UTC", "timezone_selected": True})):
             await handle_callback(update_cb, MagicMock())
             mock_add.assert_called_once()
             call_text = mock_add.call_args[0][2]

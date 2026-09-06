@@ -17,7 +17,8 @@ from bot.utils.lists import (
     get_user_list,
     list_list_items,
 )
-from bot.handlers.common import get_user_model_settings, update_user_language, get_effective_timezone
+from bot.handlers.common import get_user_model_settings, update_user_language, get_effective_timezone, is_timezone_selected
+from bot.handlers.settings import TIMEZONE_ONBOARDING_TEXT, get_timezone_keyboard
 from config import DEFAULT_SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -185,6 +186,27 @@ async def stream_response(provider, messages, status_msg, user_id, chat_id, sett
         except: pass
 
 async def process_gpt_request(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, manual_text: str = None):
+    chat = update.effective_chat
+    is_private = bool(chat and chat.type == 'private')
+    if is_private:
+        user_settings = await get_user_model_settings(user_id)
+        if not is_timezone_selected(user_settings):
+            picker_markup = get_timezone_keyboard(include_back=False)
+            if update.callback_query:
+                await update.callback_query.answer()
+                if update.callback_query.message:
+                    await update.callback_query.message.reply_text(
+                        TIMEZONE_ONBOARDING_TEXT,
+                        reply_markup=picker_markup
+                    )
+            elif update.message:
+                await update.message.reply_text(
+                    TIMEZONE_ONBOARDING_TEXT,
+                    reply_markup=picker_markup,
+                    quote=True
+                )
+            return
+
     provider = await get_ai_provider(user_id)
     if not provider: return
 

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from telegram import Update, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
+from telegram.error import BadRequest
 from bot.utils.context import context_manager
 from bot.handlers.ai import (
     process_gpt_request,
@@ -33,7 +34,8 @@ from bot.utils.action_drafts import (
     DRAFT_STATUS_CANCELLED,
     DRAFT_STATUS_EXPIRED,
 )
-from bot.handlers.common import get_effective_timezone
+from bot.handlers.common import get_effective_timezone, get_user_model_settings, is_timezone_selected
+from bot.handlers.settings import TIMEZONE_ONBOARDING_TEXT, get_timezone_keyboard
 from bot.utils.scheduled_tasks import (
     transition_task_occurrence_terminal,
     snooze_task_occurrence,
@@ -219,6 +221,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer(ERROR_TRANSCRIPTION_NOT_FOUND, show_alert=True)
             return
 
+        is_private = bool(update.effective_chat and update.effective_chat.type == "private")
+        if is_private and draft.action_type in ("schedule_reminder", "create_scheduled_tasks"):
+            user_settings = await get_user_model_settings(user.id)
+            if not is_timezone_selected(user_settings):
+                await query.answer()
+                if query.message:
+                    await query.message.reply_text(
+                        TIMEZONE_ONBOARDING_TEXT,
+                        reply_markup=get_timezone_keyboard(include_back=False),
+                    )
+                return
+
         # Consume the explicit clarification attempt: remove old action keyboard
         if query.message:
             try:
@@ -273,7 +287,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data and query.data.startswith("draft"):
         parts = query.data.split(":")
-        if len(parts) != 3 or parts[0] != "draft" or parts[1] not in ("ok", "no") or not parts[2].isdigit() or int(parts[2]) <= 0:
+        if len(parts) != 3 or parts[0] != "draft" or parts[1] not in ("ok", "no", "yes") or not parts[2].isdigit() or int(parts[2]) <= 0:
             await query.answer("❌ Некоректні дані запиту.", show_alert=True)
             return
 
@@ -321,7 +335,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             return
 
-        elif action == "ok":
+        elif action in ("ok", "yes"):
             if draft.status == DRAFT_STATUS_AWAITING_INFO:
                 await query.answer("⚠️ Недостатньо даних для виконання дії.", show_alert=True)
                 return
@@ -343,6 +357,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         pass
                 return
+
+            if draft.status == DRAFT_STATUS_CONFIRMED:
+                await query.answer("⚠️ Цю дію вже підтверджено.", show_alert=True)
+                if query.message:
+                    try:
+                        await query.message.edit_reply_markup(None)
+                    except Exception:
+                        pass
+                return
+
+            is_private = bool(update.effective_chat and update.effective_chat.type == "private")
+            if is_private and draft.action_type in ("schedule_reminder", "create_scheduled_tasks"):
+                user_settings = await get_user_model_settings(user.id)
+                if not is_timezone_selected(user_settings):
+                    await query.answer()
+                    if query.message:
+                        await query.message.reply_text(
+                            TIMEZONE_ONBOARDING_TEXT,
+                            reply_markup=get_timezone_keyboard(include_back=False),
+                        )
+                    return
 
             confirmed_draft, transitioned = await confirm_action_draft(draft_id, user.id, chat_id)
             if not confirmed_draft:
@@ -612,7 +647,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             or chat_id == 0
             or not query.message
         ):
-            await query.answer("❌ Некоректні дані запиту.", show_alert=True)
+            try:
+                await query.answer("❌ Некоректні дані запиту.", show_alert=True)
+            except BadRequest:
+                pass
             return
 
         try:
@@ -685,11 +723,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.answer(f"🧹 Видалено куплених пунктів: {cleared_count}.")
                 else:
                     await query.answer("ℹ️ Куплених пунктів немає.", show_alert=True)
+        except BadRequest:
+            logger.warning(
+                f"Stale or invalid callback query in list callback: action={action}, list_id={list_id}, chat_id={chat_id}, user_id={user.id}"
+            )
+            return
         except Exception:
             logger.error(
                 f"DB error in list callback: action={action}, list_id={list_id}, item_id={item_id}, chat_id={chat_id}, user_id={user.id}"
             )
-            await query.answer("⚠️ Не вдалося оновити список через помилку бази даних. Спробуйте ще раз.", show_alert=True)
+            try:
+                await query.answer("⚠️ Не вдалося оновити список через помилку бази даних. Спробуйте ще раз.", show_alert=True)
+            except BadRequest:
+                pass
             return
 
         # UI refresh from actual DB

@@ -47,14 +47,30 @@ async def check_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return False
 
 # --- УНІВЕРСАЛЬНА ФУНКЦІЯ ОНОВЛЕННЯ ---
-async def update_setting(chat_id, key, value):
+async def update_settings(chat_id, **kwargs):
     async with AsyncSessionLocal() as session:
         obj = await session.get(User, chat_id)
         if obj:
-            settings = dict(obj.settings)
-            settings[key] = value
+            settings = dict(obj.settings or {})
+            settings.update(kwargs)
             obj.settings = settings
             await session.commit()
+
+async def update_setting(chat_id, key, value):
+    await update_settings(chat_id, **{key: value})
+
+TIMEZONE_ONBOARDING_TEXT = "🌍 Щоб правильно показувати час нагадувань, оберіть ваш часовий пояс."
+
+def get_timezone_keyboard(include_back: bool = False) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("🇺🇦 Kyiv", callback_data="set_tz_Europe/Kiev")],
+        [InlineKeyboardButton("🇬🇧 London", callback_data="set_tz_Europe/London")],
+        [InlineKeyboardButton("🌐 UTC", callback_data="set_tz_UTC")],
+        [InlineKeyboardButton("✍️ Інший timezone", callback_data="ask_custom_tz")],
+    ]
+    if include_back:
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")])
+    return InlineKeyboardMarkup(keyboard)
 
 def get_main_menu_keyboard():
     keyboard = [
@@ -407,22 +423,29 @@ async def timezone_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with AsyncSessionLocal() as session:
         obj = await session.get(User, chat_id)
-        current_tz = (obj.settings or {}).get('timezone', BOT_TIMEZONE) if obj else BOT_TIMEZONE
+        settings = obj.settings if (obj and obj.settings) else {}
 
-    keyboard = [
-        [InlineKeyboardButton("🇺🇦 Kyiv", callback_data="set_tz_Europe/Kiev")],
-        [InlineKeyboardButton("🇬🇧 London", callback_data="set_tz_Europe/London")],
-        [InlineKeyboardButton("🌐 UTC", callback_data="set_tz_UTC")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="settings_menu")]
-    ]
-    try: await query.edit_message_text(f"🌍 Часовий пояс: <code>{current_tz}</code>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    is_private = update.effective_chat.type == 'private'
+    if is_private and not settings.get('timezone_selected'):
+        display_tz = "&lt;не обрано&gt;"
+    else:
+        raw_tz = settings.get('timezone', BOT_TIMEZONE)
+        display_tz = str(raw_tz)
+
+    keyboard = get_timezone_keyboard(include_back=True)
+    try: await query.edit_message_text(f"🌍 Часовий пояс: <code>{display_tz}</code>", reply_markup=keyboard, parse_mode='HTML')
     except BadRequest: pass
 
 async def set_timezone_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return
     query = update.callback_query
     new_tz = query.data.replace("set_tz_", "")
-    await update_setting(update.effective_chat.id, 'timezone', new_tz)
+    try:
+        zoneinfo.ZoneInfo(new_tz)
+    except Exception:
+        await query.answer("❌ Невірна зона.", show_alert=True)
+        return
+    await update_settings(update.effective_chat.id, timezone=new_tz, timezone_selected=True)
     await query.answer(f"Встановлено: {new_tz}")
     await timezone_menu(update, context)
 
@@ -549,18 +572,33 @@ async def save_custom_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def ask_custom_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return ConversationHandler.END
     query = update.callback_query; await query.answer()
-    await query.edit_message_text("Введіть зону (напр. CET):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Скасувати", callback_data="cancel_conv")]]))
+    text = (
+        "Введіть назву часового поясу за стандартом IANA.\n\n"
+        "Приклади:\n"
+        "• <code>Europe/Warsaw</code>\n"
+        "• <code>America/Toronto</code>"
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("Скасувати", callback_data="cancel_conv")]])
+    try:
+        await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
+    except BadRequest:
+        if update.effective_message:
+            await update.effective_message.reply_text(text, reply_markup=markup, parse_mode='HTML')
     return WAITING_FOR_TIMEZONE
 
 async def save_custom_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_group_admin(update, context): return ConversationHandler.END
     tz = update.message.text.strip()
-    try: zoneinfo.ZoneInfo(tz)
-    except:
-        await update.message.reply_text("❌ Невірна зона.")
+    try:
+        zoneinfo.ZoneInfo(tz)
+    except Exception:
+        await update.message.reply_text(
+            "❌ Невірна назва часового поясу IANA. Спробуйте ще раз (наприклад, <code>Europe/Warsaw</code> або <code>America/Toronto</code>):",
+            parse_mode='HTML'
+        )
         return WAITING_FOR_TIMEZONE
-    await update_setting(update.effective_chat.id, 'timezone', tz)
-    await update.message.reply_text(f"✅ Час: {tz}")
+    await update_settings(update.effective_chat.id, timezone=tz, timezone_selected=True)
+    await update.message.reply_text(f"✅ Встановлено часовий пояс: <code>{tz}</code>", parse_mode='HTML')
     return ConversationHandler.END
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):

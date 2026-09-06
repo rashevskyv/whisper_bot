@@ -1,4 +1,19 @@
-# Walkthrough: Whisper Bot v2.5.1
+# Walkthrough: Whisper Bot v2.5.2
+
+## Огляд релізу v2.5.2
+
+1. **Явний timezone onboarding у приватних чатах**: поле `timezone_selected` відокремлює системний fallback від вибору людини. Нові та legacy-користувачі без цього явного вибору бачать компактний picker на `/start` або перед першим AI-запитом. Доступні Kyiv, London, UTC та довільна валідна IANA timezone.
+2. **Безпечне блокування лише розкладів**: до вибору timezone приватний бот не створює й не виконує нагадування або розклади, зокрема зі старих ActionDraft і кнопки «Обробити як інструкцію». Транскрипція голосових і списки покупок працюють як раніше. У групах onboarding не з'являється, а timezone і надалі задає адміністратор групи.
+3. **Надійні застарілі кнопки списків**: прострочений Telegram callback (`BadRequest`) більше не маскується під DB-помилку та не спричиняє повторний `query.answer` або traceback.
+4. **Версія програми**: `APP_VERSION` піднято до `2.5.2`.
+
+## Верифікація v2.5.2
+
+- За звітом Gemini: focused suite — **163 passed**, повний паралельний suite — **465 passed**.
+- Senior-review простежив private/group routing, реєстрацію timezone callbacks і ConversationHandler, а також відсутність AI side effect до явного вибору timezone.
+- `git diff --check` чистий.
+
+---
 
 ## Огляд релізу v2.5.1
 
@@ -22,6 +37,35 @@
   - `git diff --check` повертає 0 помилок форматування/пробілів.
   - Єдина точка `execute_mutation=True` у коді бота — довірений `bot/handlers/callbacks.py:388`.
   - Відсутні витоки чутливих даних або небажані конструкції у логах `bot/ai/tools.py`, `bot/utils/lists.py`, `bot/handlers/common.py`, `bot/handlers/settings.py`.
+
+---
+
+## Надійність: обробка stale Telegram callback у списку покупок (v2.5.2 patch)
+
+1. **Проблема**:
+   При спробі відповісти на прострочений або недійсний callback (`query.answer(...)`) Telegram API повертає виняток `telegram.error.BadRequest: Query is too old and response timeout expired or query id is invalid`.
+   У гілці обробки callback-ів списку покупок (`bot/handlers/callbacks.py`) цей виняток перехоплювався загальним блоком `except Exception`, через що помилка некоректно класифікувалася як помилка бази даних (`DB error in list callback`), і викликався повторний `query.answer(...)`, що призводило до другого падіння та зайвого traceback у системному лозі.
+
+2. **Виправлення**:
+   - Імпортовано `BadRequest` із `telegram.error` у `bot/handlers/callbacks.py`.
+   - У блоці `list:` callback оброблено `BadRequest` окремо перед `except Exception`:
+     - Не класифікується як DB-помилка.
+     - Повторний виклик `query.answer` не здійснюється.
+     - Handler безпечно повертає керування (`return`).
+     - Логується коротке попередження виключно з безпечними числовими ідентифікаторами (`action`, `list_id`, `chat_id`, `user_id`) без об'єкта винятку, traceback, тексту пунктів чи назви списку.
+   - У fallback-блоці справжньої DB-помилки виклик `query.answer(...)` обгорнуто в `try ... except BadRequest: pass`, щоб прострочений запит під час збою БД не створював traceback.
+   - Валідацію вхідних даних списку покупок також захищено від падіння при stale callback.
+
+3. **Верифікація**:
+   - Додано регресійний тест `test_55_stale_callback_bad_request_handled_safely` у `test_list_callbacks.py`.
+   - Перевірено:
+     - `query.answer()` кидає `BadRequest`.
+     - Handler не викидає виняток назовні.
+     - Callback не викликається вдруге (`call_count == 1`).
+     - DB helper не викликається повторно (`call_count == 1`).
+     - Логи не містять назви списку, тексту товару, traceback чи рядка винятку, і містять safe IDs.
+   - Усі тести списків та чернеток: `.\venv\Scripts\python.exe -m unittest -v test_list_callbacks.py test_draft_callbacks.py` -> **75 passed**, `OK`.
+   - Повний набір тестів: `pytest -n auto` -> **453 passed** за 25.32 с.
 
 ---
 

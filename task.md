@@ -53,3 +53,12 @@
 - [x] Усунути хардкод `'Europe/Kiev'` у `timezone_menu` в `bot/handlers/settings.py`.
 - [x] Реалізувати `get_effective_timezone(user_id, chat_id)` у `bot/handlers/common.py` для ізоляції та пріоритету timezone групи над налаштуваннями автора в усіх action і display handlers.
 - [x] Покрити новий функціонал тестами (`test_scheduled_action.py`, `test_lists.py`, `test_shopping_actions.py`, `test_ai_tools.py`, `test_draft_callbacks.py`, `test_draft_routing.py`) та зберегти `APP_VERSION = "2.5.1"`.
+
+## Завершена задача — явний timezone onboarding v2.5.2
+
+- [x] Додати явний вибір timezone для приватного користувача; default сервера не дорівнює вибору користувача.
+- [x] Показувати timezone picker на `/start` і безпечно блокувати AI-запит до вибору timezone.
+- [x] Позначати вибір через onboarding або меню налаштувань як явний і не ламати explicit UTC.
+- [x] Не змінювати груповий timezone workflow: його встановлює адміністратор групи.
+- [x] Безпечна обробка stale Telegram callback у shopping list: перехоплення BadRequest окремо від DB-помилок, усунення другого query.answer, запобігання зайвому traceback, безпечне логування safe IDs (action, list_id, chat_id, user_id) та захист fallback query.answer при реальних DB-помилках.
+- [x] Додати focused regression tests, підняти версію до `2.5.2`, перевірити повний suite і створити focused commit після senior-review.

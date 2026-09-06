@@ -8,7 +8,8 @@ from sqlalchemy import desc, and_
 from bot.database.session import AsyncSessionLocal
 from bot.database.models import User, UserMemory
 from bot.utils.helpers import get_or_create_user
-from bot.handlers.settings import get_main_menu_keyboard, check_group_admin
+from bot.handlers.settings import get_main_menu_keyboard, check_group_admin, TIMEZONE_ONBOARDING_TEXT, get_timezone_keyboard
+from bot.handlers.common import get_user_model_settings, is_timezone_selected
 from bot.utils.scheduler import scheduler_service
 from bot.utils.queue_manager import get_queue_stats, clear_pending_tasks, clear_all_tasks
 from config import ADMIN_IDS, DEFAULT_SETTINGS, DEFAULT_GROUP_SETTINGS
@@ -87,6 +88,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
         await update.message.reply_text("Швидкий доступ:", reply_markup=get_main_menu_keyboard())
+
+        user_settings = await get_user_model_settings(user.id)
+        if not is_timezone_selected(user_settings):
+            await update.message.reply_text(
+                TIMEZONE_ONBOARDING_TEXT,
+                reply_markup=get_timezone_keyboard(include_back=False)
+            )
 
     else:
         # В ГРУПАХ - ПРИБИРАЄМО КНОПКИ

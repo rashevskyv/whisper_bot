@@ -10,7 +10,7 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Kiev")
-APP_VERSION = "2.5.1"
+APP_VERSION = "2.5.2"
 
 ENABLE_VIDEO_REPOST = os.getenv("ENABLE_VIDEO_REPOST", "true").lower() in ("true", "1", "yes")
 ENABLE_VIDEO_REPOST_GROUPS = os.getenv("ENABLE_VIDEO_REPOST_GROUPS", "true").lower() in ("true", "1", "yes")
@@ -138,6 +138,7 @@ DEFAULT_SETTINGS = {
     'transcription_keywords': [],
     'video_repost': ENABLE_VIDEO_REPOST,
     'timezone': BOT_TIMEZONE,
+    'timezone_selected': False,
 
     'summary_prompt': (
         "Ти — аналітик. Перетвори текст на стислий звіт.\n"
