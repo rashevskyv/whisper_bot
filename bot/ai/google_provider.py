@@ -101,7 +101,7 @@ class GoogleProvider(LLMProvider):
 
         tech_instruction = f"\n\n[REAL-TIME CLOCK] {current_time_str}. Timezone: {user_tz_name}."
         if not disable_tools:
-            tech_instruction += f"\nReminders: {active_reminders_text}. Use tools for reminders."
+            tech_instruction += f"\nReminders: {active_reminders_text}. For reminders with natural language or relative dates (e.g. 'наступної пʼятниці', 'завтра о 15:00', 'через 2 години'), call calculate_date then schedule_reminder."
 
         full_sys_inst = (system_instruction_text or "") + tech_instruction
 

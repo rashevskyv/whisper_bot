@@ -7,7 +7,7 @@ import zoneinfo
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Set
 
-from bot.utils.date_helper import calculate_future_date
+from bot.utils.date_helper import calculate_future_date, calculate_future_date_details
 from bot.utils.scheduler import scheduler_service
 from bot.utils.scheduled_tasks import create_scheduled_tasks_batch
 from bot.utils.search import perform_search, extract_source_links
@@ -43,10 +43,20 @@ logger = logging.getLogger(__name__)
 
 CALCULATE_DATE_SCHEMA: Dict[str, Any] = {
     "name": "calculate_date",
-    "description": "Convert LOCAL datetime string to UTC ISO.",
+    "description": (
+        "Calculate and convert free-form local date/time or relative expressions "
+        "(e.g., 'наступної пʼятниці', 'завтра о 15:00', 'через 2 години', 'next friday at 15:00', "
+        "'2026-10-15 14:30:00') into UTC ISO format for scheduling reminders. "
+        "Understands Ukrainian and English natural language dates relative to current time."
+    ),
     "parameters": {
         "type": "object",
-        "properties": {"local_datetime": {"type": "string"}},
+        "properties": {
+            "local_datetime": {
+                "type": "string",
+                "description": "Free-form local date/time or relative expression (e.g. 'наступної пʼятниці', 'завтра о 15:00', 'через 2 години', '2026-10-15 14:30:00')."
+            }
+        },
         "required": ["local_datetime"]
     }
 }
@@ -950,14 +960,29 @@ async def execute_tool(
                 payload={"success": False, "error": "local_datetime is required and must be a non-empty string"},
                 stop=False
             )
-        iso_res = calculate_future_date(local_dt.strip(), tz_str)
-        if not iso_res or iso_res.startswith("Error"):
+        iso_res, local_dt_str, weekday_en, weekday_uk = calculate_future_date_details(local_dt.strip(), tz_str)
+        if not iso_res:
+            err_msg = calculate_future_date(local_dt.strip(), tz_str)
             return ToolResult(
-                payload={"success": False, "error": iso_res or "Invalid date format"},
+                payload={"success": False, "error": err_msg if err_msg.startswith("Error") else "Invalid date format"},
                 stop=False
             )
+        try:
+            user_tz = zoneinfo.ZoneInfo(tz_str)
+        except Exception:
+            user_tz = zoneinfo.ZoneInfo("UTC")
+        now_local = datetime.datetime.now(user_tz).strftime("%Y-%m-%d %H:%M:%S")
+
         return ToolResult(
-            payload={"success": True, "iso_time_utc": iso_res},
+            payload={
+                "success": True,
+                "iso_time_utc": iso_res,
+                "local_datetime": local_dt_str,
+                "weekday": weekday_en,
+                "weekday_uk": weekday_uk,
+                "timezone": tz_str,
+                "current_datetime": now_local,
+            },
             stop=False
         )
 
@@ -1061,6 +1086,24 @@ async def execute_tool(
                         parsed_dt_utc = dt_utc
             except Exception:
                 pass
+
+            if valid_iso_utc is None:
+                # Fallback: parse free-form natural language date expression
+                parsed_freeform = calculate_future_date(raw_iso.strip(), tz_str)
+                if parsed_freeform and not parsed_freeform.startswith("Error"):
+                    try:
+                        clean_ff = parsed_freeform.strip()
+                        if clean_ff.endswith("Z") or clean_ff.endswith("z"):
+                            clean_ff = clean_ff[:-1] + "+00:00"
+                        dt = datetime.datetime.fromisoformat(clean_ff)
+                        if dt.tzinfo is not None and dt.tzinfo.utcoffset(dt) is not None:
+                            dt_utc = dt.astimezone(datetime.timezone.utc)
+                            now_utc = datetime.datetime.now(datetime.timezone.utc)
+                            if dt_utc > now_utc:
+                                valid_iso_utc = dt_utc.isoformat()
+                                parsed_dt_utc = dt_utc
+                    except Exception:
+                        pass
 
         missing_fields: List[str] = []
         draft_payload: Dict[str, Any] = {}

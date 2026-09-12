@@ -49,6 +49,7 @@ The bot features **real-time web search**, smart summarization, context memory, 
 - **Restart Resilience & Missed Policy:** Schedules, snoozes, and active drafts persist across restarts. Overdue offline occurrences are reconciled and summarized atomically without spamming the chat.
 - **Timezone Aware:** Full IANA timezone support handling local offsets, gaps, and daylight saving transitions seamlessly. Group chats strictly respect the group's configured timezone (preventing author timezones from overriding the group), while private chats preserve explicit UTC or custom preferences, defaulting reliably to `BOT_TIMEZONE`.
 - **Natural Time Parsing:** Clarifications accept short natural answers such as "10", "в 10", "о 8:30", or standard "08:30".
+- **Free-Form Natural Language Dates:** Set reminders using flexible Ukrainian and English natural language dates and relative expressions (e.g., "наступної пʼятниці о 15:00", "в цю суботу о 10:30", "завтра вранці", "післязавтра о 18:00", "через 2 години", "через півгодини", "next friday at 3pm"). The built-in tool automatically determines the user's current local date/time, resolves relative calendar intervals, and schedules exact reminders without LLM date arithmetic hallucinations. Both tool calls and chat clarification replies seamlessly understand free-form expressions.
 
 ### 🛒 Interactive Shopping & Task Lists
 - **Named & Chat-Scoped Lists:** Create and manage separate shopping lists (e.g., groceries, hardware) isolated per chat, with an automatic default list.
@@ -145,7 +146,7 @@ We use a helper script `start.sh` that handles virtual environment creation and 
 
     # Admin IDs (comma separated)
     ADMIN_IDS=12345678,87654321
-    
+
     # Timezone
     BOT_TIMEZONE=Europe/Kiev
     ```

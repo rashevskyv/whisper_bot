@@ -73,7 +73,7 @@ class OpenRouterProvider(LLMProvider):
         system_base = "STRICT RULES: Be helpful and concise."
 
         if not disable_tools:
-            system_base += "\nFor reminders: use [REAL-TIME CLOCK] to calculate absolute time. Tool order: calculate_date -> schedule_reminder."
+            system_base += "\nFor reminders: for natural language or relative dates (e.g. 'наступної пʼятниці', 'завтра о 15:00', 'через 2 години'), call calculate_date to resolve the exact date/time, then call schedule_reminder. Tool order: calculate_date -> schedule_reminder."
 
         if sys_idx is not None:
             local_messages[sys_idx]['content'] += f"\n{system_base}"
