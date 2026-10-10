@@ -282,7 +282,7 @@ class TestTextHandlerRouting(unittest.IsolatedAsyncioTestCase):
         self.drafts_patcher.stop()
         await self.engine.dispose()
 
-    # 1. Intercepts before menu, DL, vision, AI
+    # 1. Intercepts before menu, DL, vision; a free-text field goes to the AI with the draft
     async def test_intercepts_before_menu_dl_vision_ai(self):
         draft = await create_action_draft(
             user_id=10, chat_id=20, action_type="schedule_reminder",
@@ -292,24 +292,41 @@ class TestTextHandlerRouting(unittest.IsolatedAsyncioTestCase):
         context = MagicMock()
 
         with patch("bot.handlers.text.process_gpt_request", new_callable=AsyncMock) as mock_gpt, \
+             patch("bot.handlers.text.context_manager.save_message", new_callable=AsyncMock) as mock_save, \
              patch("bot.utils.scheduler.scheduler_service.get_active_reminders", new_callable=AsyncMock) as mock_rems, \
              patch("bot.handlers.text.download_media_direct", new_callable=AsyncMock) as mock_dl:
             await handle_text(update, context)
 
-            mock_gpt.assert_not_called()
+            mock_gpt.assert_called_once()
+            mock_save.assert_called_once_with(10, 20, 'user', "Meeting with team")
             mock_rems.assert_not_called()
             mock_dl.assert_not_called()
-            message.reply_text.assert_called_once()
-            call_args = message.reply_text.call_args[0]
-            self.assertIn("❓ На коли встановити нагадування?", call_args[0])
+            message.reply_text.assert_not_called()
+
+        async with self.SessionLocal() as session:
+            reloaded = await session.get(ActionDraft, draft.id)
+            self.assertEqual(reloaded.payload, {})
+
+    # 1b. A structured field that does not parse goes to the AI, not to a dead-end error
+    async def test_unparsed_structured_reply_routes_to_ai(self):
+        await create_action_draft(
+            user_id=10, chat_id=20, action_type="delete_reminder",
+            payload={}, missing_fields=["reminder_id"]
+        )
+        update, message = make_mock_text_update("Напиши мені список всіх нагадувань", user_id=10, chat_id=20)
+        with patch("bot.handlers.text.process_gpt_request", new_callable=AsyncMock) as mock_gpt, \
+             patch("bot.handlers.text.context_manager.save_message", new_callable=AsyncMock):
+            await handle_text(update, MagicMock())
+            mock_gpt.assert_called_once()
+            message.reply_text.assert_not_called()
 
     # 2. Incomplete draft receives Cancel-only markup
     async def test_incomplete_markup_cancel_only(self):
         draft = await create_action_draft(
             user_id=10, chat_id=20, action_type="schedule_reminder",
-            payload={}, missing_fields=["text", "iso_time_utc"]
+            payload={}, missing_fields=["iso_time_utc", "text"]
         )
-        update, message = make_mock_text_update("Meeting", user_id=10, chat_id=20)
+        update, message = make_mock_text_update("2028-12-01 10:00:00", user_id=10, chat_id=20)
         await handle_text(update, MagicMock())
 
         markup = message.reply_text.call_args[1].get("reply_markup")
@@ -359,7 +376,7 @@ class TestTextHandlerRouting(unittest.IsolatedAsyncioTestCase):
     async def test_race_state_expiry_no_fallthrough(self):
         draft = await create_action_draft(
             user_id=10, chat_id=20, action_type="schedule_reminder",
-            payload={}, missing_fields=["text", "iso_time_utc"]
+            payload={}, missing_fields=["iso_time_utc", "text"]
         )
         update, message = make_mock_text_update("Some text", user_id=10, chat_id=20)
         with patch("bot.handlers.text.apply_action_draft_reply", new_callable=AsyncMock) as mock_apply, \
@@ -384,7 +401,9 @@ class TestTextHandlerRouting(unittest.IsolatedAsyncioTestCase):
         secret_reply = "TOP_SECRET_CLARIFICATION_TOKEN_xyz123"
         update, message = make_mock_text_update(secret_reply, user_id=10, chat_id=20)
 
-        with self.assertLogs("bot", level=logging.INFO) as captured:
+        with patch("bot.handlers.text.process_gpt_request", new_callable=AsyncMock), \
+             patch("bot.handlers.text.context_manager.save_message", new_callable=AsyncMock), \
+             self.assertLogs("bot", level=logging.INFO) as captured:
             await handle_text(update, MagicMock())
             for record in captured.records:
                 self.assertNotIn(secret_reply, record.getMessage())
@@ -393,7 +412,7 @@ class TestTextHandlerRouting(unittest.IsolatedAsyncioTestCase):
     async def test_text_apply_failure_does_not_fall_through(self):
         draft = await create_action_draft(
             user_id=10, chat_id=20, action_type="schedule_reminder",
-            payload={"initial": "val"}, missing_fields=["text", "iso_time_utc"]
+            payload={"initial": "val"}, missing_fields=["iso_time_utc", "text"]
         )
         secret_marker = "TEXT_REPLY_SECRET_789"
         secret_reply = "USER_SECRET_CLARIFICATION_REPLY_999"
@@ -423,7 +442,7 @@ class TestTextHandlerRouting(unittest.IsolatedAsyncioTestCase):
                 reloaded = await session.get(ActionDraft, draft.id)
                 self.assertEqual(reloaded.status, DRAFT_STATUS_AWAITING_INFO)
                 self.assertEqual(reloaded.payload, {"initial": "val"})
-                self.assertEqual(reloaded.missing_fields, ["text", "iso_time_utc"])
+                self.assertEqual(reloaded.missing_fields, ["iso_time_utc", "text"])
 
             # Check logs do not contain secrets
             for record in captured.records:
@@ -548,11 +567,11 @@ class TestTranscriptionRouting(unittest.IsolatedAsyncioTestCase):
     async def test_two_sequential_transcriptions_bind_exact_ids(self):
         draft = await create_action_draft(
             user_id=1, chat_id=2, action_type="schedule_reminder",
-            payload={}, missing_fields=["text", "iso_time_utc"]
+            payload={"text": "Clean the garage"}, missing_fields=["iso_time_utc"]
         )
         async with self.SessionLocal() as session:
-            msg1 = MessageCache(user_id=1, chat_id=2, role="transcription", content="Clean the garage")
-            msg2 = MessageCache(user_id=1, chat_id=2, role="transcription", content="Walk the dog")
+            msg1 = MessageCache(user_id=1, chat_id=2, role="transcription", content="2028-06-15 11:00:00")
+            msg2 = MessageCache(user_id=1, chat_id=2, role="transcription", content="2029-07-20 12:00:00")
             session.add_all([msg1, msg2])
             await session.commit()
             await session.refresh(msg1)
@@ -565,7 +584,7 @@ class TestTranscriptionRouting(unittest.IsolatedAsyncioTestCase):
 
         async with self.SessionLocal() as session:
             reloaded = await session.get(ActionDraft, draft.id)
-            self.assertEqual(reloaded.payload["text"], "Clean the garage")
+            self.assertTrue(reloaded.payload["iso_time_utc"].startswith("2028-06-15"))
 
     # 4. Malformed, foreign, or terminal callbacks leave original untouched
     async def test_callback_rejections_leave_message_untouched(self):
@@ -634,17 +653,17 @@ class TestTranscriptionRouting(unittest.IsolatedAsyncioTestCase):
 
         cb_data = f"draft:fill:{draft.id}:{msg.id}"
         update, query = make_mock_callback_update(cb_data, user_id=1, chat_id=2)
-        await handle_callback(update, MagicMock())
+        with patch("bot.handlers.callbacks.process_gpt_request", new_callable=AsyncMock) as mock_gpt:
+            await handle_callback(update, MagicMock())
+            mock_gpt.assert_called_once()
 
-        # Old keyboard consumed
+        # Old keyboard consumed; the AI answers instead of a dead-end error
         query.message.edit_reply_markup.assert_called_once_with(None)
-        # Sent correction question
-        query.message.reply_text.assert_called_once()
-        text_arg = query.message.reply_text.call_args[0][0]
-        self.assertIn("коректні дату та час", text_arg)
-        markup_arg = query.message.reply_text.call_args[1]["reply_markup"]
-        self.assertEqual(len(markup_arg.inline_keyboard[0]), 1)
-        self.assertEqual(markup_arg.inline_keyboard[0][0].text, "❌ Скасувати")
+        query.message.reply_text.assert_not_called()
+        async with self.SessionLocal() as session:
+            reloaded = await session.get(ActionDraft, draft.id)
+            self.assertEqual(reloaded.status, DRAFT_STATUS_AWAITING_INFO)
+            self.assertEqual(reloaded.payload, {"text": "Water plants"})
 
     # 7. Media active draft lookup failure keeps transcription and standard buttons without leaking
     async def test_media_active_draft_lookup_failure(self):

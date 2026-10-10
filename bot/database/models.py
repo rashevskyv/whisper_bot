@@ -122,6 +122,7 @@ class ScheduledTask(Base):
     local_time = Column(String(5), nullable=False)
     timezone = Column(String, nullable=False)
     days_of_week = Column(JSON, nullable=False)
+    end_date = Column(String(10), nullable=True)  # останній локальний день курсу, YYYY-MM-DD, включно
     active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

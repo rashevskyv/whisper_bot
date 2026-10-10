@@ -820,6 +820,32 @@ class TestScheduledScheduler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kb.inline_keyboard[1][1].callback_data, f"occ:s30:{occ.id}")
         self.assertEqual(kb.inline_keyboard[2][0].callback_data, f"occ:skip:{occ.id}")
 
+    # 34. A limited course stops firing after end_date and is deactivated on restore
+    async def test_34_end_date_limits_cron_and_restore_deactivates(self):
+        task = await create_scheduled_task(
+            user_id=1, chat_id=10, context_type="medication",
+            name="Сорбент", local_time="10:00", timezone_name="Europe/Kyiv",
+            days_of_week=[0, 1, 2, 3, 4, 5, 6], dosage="1 пакетик"
+        )
+        async with self.SessionLocal() as session:
+            await session.execute(
+                text("UPDATE scheduled_tasks SET end_date = '2026-10-10' WHERE id = :id"), {"id": task.id}
+            )
+            await session.commit()
+        task = await get_scheduled_task(task.id, 1, 10)
+
+        self.service.schedule_recurring_task(task)
+        trigger = self.service.scheduler.get_job(f"scheduled_task:{task.id}").trigger
+        kyiv = ZoneInfo("Europe/Kyiv")
+        on_last_day = trigger.get_next_fire_time(None, datetime(2026, 10, 10, 9, 0, tzinfo=kyiv))
+        self.assertEqual(on_last_day, datetime(2026, 10, 10, 10, 0, tzinfo=kyiv))
+        self.assertIsNone(trigger.get_next_fire_time(None, datetime(2026, 10, 10, 11, 0, tzinfo=kyiv)))
+
+        self.service.scheduler.remove_all_jobs()
+        await self.service.restore_scheduled_tasks(now=datetime(2026, 10, 11, 9, 0, tzinfo=kyiv))
+        self.assertIsNone(self.service.scheduler.get_job(f"scheduled_task:{task.id}"))
+        self.assertFalse((await get_scheduled_task(task.id, 1, 10)).active)
+
 
 class TestScheduledSchedulerConcurrency(unittest.IsolatedAsyncioTestCase):
     """File-backed SQLite with WAL mode for real delivery concurrency race check (Scenario 11)."""

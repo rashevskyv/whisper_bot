@@ -15,7 +15,7 @@ from bot.utils.action_drafts import (
     get_active_action_draft,
     DRAFT_STATUS_AWAITING_INFO,
 )
-from bot.ai.tools import apply_action_draft_reply
+from bot.ai.tools import apply_action_draft_reply, draft_field_needs_ai, AI_FALLBACK_ERRORS
 from bot.handlers.settings import get_main_menu_keyboard, TIMEZONE_ONBOARDING_TEXT, get_timezone_keyboard
 from bot.handlers.common import should_respond, get_user_model_settings, get_effective_timezone, is_timezone_selected
 from bot.handlers.ai import process_gpt_request, build_draft_reply_markup
@@ -162,6 +162,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             effective_tz = BOT_TIMEZONE
 
+        if draft_field_needs_ai(active_draft):
+            logger.info(f"Draft clarification routed to AI: draft_id={active_draft.id}, user_id={user.id}, chat_id={chat_id}")
+            await context_manager.save_message(user.id, chat_id, 'user', text)
+            await process_gpt_request(update, context, user.id)
+            return
+
         try:
             result = await apply_action_draft_reply(
                 draft_id=active_draft.id,
@@ -180,6 +186,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=fallback_markup,
                 quote=True,
             )
+            return
+
+        if result.payload.get("error") in AI_FALLBACK_ERRORS:
+            logger.info(f"Draft clarification routed to AI: draft_id={active_draft.id}, user_id={user.id}, chat_id={chat_id}")
+            await context_manager.save_message(user.id, chat_id, 'user', text)
+            await process_gpt_request(update, context, user.id)
             return
 
         target_draft_id = result.draft_id or active_draft.id

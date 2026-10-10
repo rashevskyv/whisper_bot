@@ -1266,6 +1266,60 @@ class TestScheduledAction(unittest.IsolatedAsyncioTestCase):
             called_kwargs_p = mock_exec.call_args[1]
             self.assertEqual(called_kwargs_p["timezone_name"], "UTC")
 
+    # Recurring schedule: visible to the AI, deletable by scheduled_task_id, owner-only
+    async def test_delete_recurring_schedule_by_scheduled_task_id(self):
+        from bot.ai.tools import get_active_reminders_summary, get_active_draft_context
+        task = await create_scheduled_task(
+            1, 2, "medication", "пробіотик", "11:00", "Europe/Kyiv", [0, 1, 2, 3, 4, 5, 6],
+            dosage="Одна ампула на добу",
+        )
+
+        summary = await get_active_reminders_summary(2, "Europe/Kyiv")
+        self.assertIn(f"Schedule ID: {task.id}", summary)
+        self.assertIn("пробіотик", summary)
+
+        foreign = await execute_tool("delete_reminder", {"scheduled_task_id": task.id}, user_id=999, chat_id=2)
+        self.assertEqual(foreign.payload["error"], "scheduled_task_not_found")
+
+        res = await execute_tool("delete_reminder", {"scheduled_task_id": task.id}, user_id=1, chat_id=2)
+        self.assertTrue(res.stop)
+        self.assertIn("пробіотик", res.display_text)
+        self.assertIn("delete_reminder", await get_active_draft_context(1, 2))
+
+        with patch("bot.ai.tools.scheduler_service.unschedule_recurring_task") as mock_unsched:
+            done = await execute_tool(
+                "delete_reminder", {"scheduled_task_id": task.id}, user_id=1, chat_id=2, execute_mutation=True
+            )
+            self.assertTrue(done.payload["success"])
+            mock_unsched.assert_called_once_with(task.id)
+
+        self.assertFalse((await get_scheduled_task(task.id, 1, 2)).active)
+        self.assertNotIn("пробіотик", await get_active_reminders_summary(2, "Europe/Kyiv"))
+
+    # A one-day course keeps end_date from the draft to the stored task; a past date goes back to the AI
+    async def test_end_date_for_limited_course(self):
+        today = datetime.now(timezone.utc).date()
+        item = {"name": "сорбент", "dosage": "1 пакетик", "local_time": "23:59", "days_of_week": [0, 1, 2, 3, 4, 5, 6]}
+        args = {"context_type": "medication", "items": [dict(item, end_date=today.isoformat())]}
+
+        past = await execute_tool(
+            "create_scheduled_tasks",
+            {"context_type": "medication", "items": [dict(item, end_date=(today - timedelta(days=1)).isoformat())]},
+            user_id=1, chat_id=2, timezone_name="UTC",
+        )
+        self.assertEqual(past.payload["error"], "invalid_end_date")
+        self.assertFalse(past.stop)
+
+        res = await execute_tool("create_scheduled_tasks", args, user_id=1, chat_id=2, timezone_name="UTC")
+        self.assertIn(f"🏁 До: {today.strftime('%d.%m.%Y')} включно", res.display_text)
+
+        with patch("bot.ai.tools.scheduler_service.schedule_recurring_task"):
+            done = await execute_tool(
+                "create_scheduled_tasks", args, user_id=1, chat_id=2, timezone_name="UTC", execute_mutation=True
+            )
+        stored = await get_scheduled_task(done.payload["task_ids"][0], 1, 2)
+        self.assertEqual(stored.end_date, today.isoformat())
+
 
 class TestTimezoneOnboardingV252(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

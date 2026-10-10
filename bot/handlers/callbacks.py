@@ -23,7 +23,7 @@ from bot.utils.lists import (
     clear_done_list_items,
 )
 from bot.utils.scheduler import scheduler_service
-from bot.ai.tools import execute_tool, apply_action_draft_reply
+from bot.ai.tools import execute_tool, apply_action_draft_reply, draft_field_needs_ai, AI_FALLBACK_ERRORS
 from bot.utils.action_drafts import (
     get_action_draft,
     confirm_action_draft,
@@ -250,6 +250,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             effective_tz = BOT_TIMEZONE
 
+        if draft_field_needs_ai(draft):
+            logger.info(f"Draft clarification routed to AI: draft_id={draft.id}, user_id={user.id}, chat_id={chat_id}")
+            await context_manager.save_message(user.id, chat_id, 'user', transcription_text)
+            await process_gpt_request(update, context, user.id)
+            return
+
         try:
             tool_result = await apply_action_draft_reply(
                 draft_id=draft.id,
@@ -268,6 +274,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "⚠️ Не вдалося обробити уточнення. Спробуйте ще раз або скасуйте дію.",
                     reply_markup=fallback_markup,
                 )
+            return
+
+        if tool_result.payload.get("error") in AI_FALLBACK_ERRORS:
+            logger.info(f"Draft clarification routed to AI: draft_id={draft.id}, user_id={user.id}, chat_id={chat_id}")
+            await context_manager.save_message(user.id, chat_id, 'user', transcription_text)
+            await process_gpt_request(update, context, user.id)
             return
 
         target_draft_id = tool_result.draft_id or draft.id

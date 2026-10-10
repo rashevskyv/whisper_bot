@@ -21,7 +21,12 @@ async def init_db():
     """Ініціалізація БД та увімкнення WAL режиму для швидкодії"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        
+        # create_all не додає колонки до наявних таблиць
+        columns = (await conn.execute(text("PRAGMA table_info(scheduled_tasks)"))).fetchall()
+        if "end_date" not in {c[1] for c in columns}:
+            await conn.execute(text("ALTER TABLE scheduled_tasks ADD COLUMN end_date VARCHAR(10)"))
+            logger.info("Added scheduled_tasks.end_date column.")
+
     # Вмикаємо Write-Ahead Logging (WAL) для роботи в кілька процесів
     async with engine.connect() as conn:
         await conn.execute(text("PRAGMA journal_mode=WAL;"))

@@ -12,7 +12,7 @@ from bot.utils.action_drafts import (
     DRAFT_STATUS_PENDING_CONFIRMATION,
     DRAFT_STATUS_AWAITING_INFO,
 )
-from bot.ai.tools import format_shopping_list_view
+from bot.ai.tools import format_shopping_list_view, get_active_draft_context
 from bot.utils.lists import (
     get_user_list,
     list_list_items,
@@ -254,6 +254,14 @@ async def process_gpt_request(update: Update, context: ContextTypes.DEFAULT_TYPE
         "role": "system",
         "content": f"[SYSTEM INFO] Current Speaker Status: {user_status_label}. React accordingly to your persona."
     })
+
+    try:
+        draft_context = await get_active_draft_context(user_id, chat_id)
+    except Exception:
+        logger.error(f"Failed to load active draft context: user_id={user_id}, chat_id={chat_id}")
+        draft_context = None
+    if draft_context:
+        messages.append({"role": "system", "content": draft_context})
 
     await stream_response(provider, messages, status_msg, user_id, chat_id, settings, reply_to_msg_id=reply_to_id)
 

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, time, timezone, timedelta
 from typing import Any, Optional, Tuple, List, Set
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -173,6 +173,28 @@ def _validate_dosage(dosage: Any, context_type: str) -> Optional[str]:
     return None
 
 
+def _validate_end_date(end_date: Any) -> Optional[str]:
+    if end_date is None:
+        return None
+    if not isinstance(end_date, str):
+        raise ValueError("end_date must be a YYYY-MM-DD string or None")
+    return date.fromisoformat(end_date.strip()).isoformat()
+
+
+def task_end_utc(task: ScheduledTask) -> Optional[datetime]:
+    """Кінець останнього дня курсу (23:59:59 локального часу задачі) в UTC, або None."""
+    if not task.end_date:
+        return None
+    end_day = date.fromisoformat(task.end_date)
+    local_end = datetime.combine(end_day, time(23, 59, 59), tzinfo=ZoneInfo(task.timezone))
+    return local_end.astimezone(timezone.utc)
+
+
+def task_has_ended(task: ScheduledTask, now: datetime) -> bool:
+    end = task_end_utc(task)
+    return end is not None and _ensure_utc(now) > end
+
+
 async def create_scheduled_task(
     user_id: int,
     chat_id: int,
@@ -239,13 +261,15 @@ async def get_scheduled_task(
         return task
 
 
-async def list_active_scheduled_tasks() -> list[ScheduledTask]:
+async def list_active_scheduled_tasks(chat_id: Optional[int] = None) -> list[ScheduledTask]:
     async with AsyncSessionLocal() as session:
         stmt = (
             select(ScheduledTask)
             .where(ScheduledTask.active.is_(True))
             .order_by(ScheduledTask.id.asc())
         )
+        if chat_id is not None:
+            stmt = stmt.where(ScheduledTask.chat_id == chat_id)
         res = await session.execute(stmt)
         tasks = list(res.scalars().all())
         for task in tasks:
@@ -638,6 +662,7 @@ async def create_scheduled_tasks_batch(
         clean_days = _validate_days_of_week(days_to_use)
         clean_details = _validate_details(item.get("details"))
         clean_dosage = _validate_dosage(item.get("dosage"), clean_context)
+        clean_end_date = _validate_end_date(item.get("end_date"))
 
         validated_items.append({
             "name": name,
@@ -645,6 +670,7 @@ async def create_scheduled_tasks_batch(
             "days_of_week": clean_days,
             "details": clean_details,
             "dosage": clean_dosage,
+            "end_date": clean_end_date,
         })
 
     async with AsyncSessionLocal() as session:
@@ -660,6 +686,7 @@ async def create_scheduled_tasks_batch(
                 local_time=v["local_time"],
                 timezone=clean_tz,
                 days_of_week=v["days_of_week"],
+                end_date=v["end_date"],
                 active=True,
             )
             session.add(task)

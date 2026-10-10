@@ -21,6 +21,9 @@ from bot.utils.scheduled_tasks import (
     mark_task_occurrence_missed,
     get_latest_task_occurrence_planned_at,
     list_pending_task_occurrences,
+    deactivate_scheduled_task,
+    task_end_utc,
+    task_has_ended,
     CONTEXT_TYPE_MEDICATION,
     OCCURRENCE_STATUS_SCHEDULED,
     OCCURRENCE_STATUS_SNOOZED,
@@ -229,6 +232,7 @@ class SchedulerService:
             minute=minute,
             day_of_week=days_str,
             timezone=tz,
+            end_date=task_end_utc(task),
         )
 
         self.scheduler.add_job(
@@ -405,8 +409,10 @@ class SchedulerService:
         active_tasks = await list_active_scheduled_tasks()
 
         for task in active_tasks:
-            # 1. Register exactly one CronTrigger job for each active task
-            self.schedule_recurring_task(task)
+            # 1. Register exactly one CronTrigger job for each active task whose course has not ended
+            ended = task_has_ended(task, now)
+            if not ended:
+                self.schedule_recurring_task(task)
 
             # 2. Reconcile offline scheduled occurrences
             latest_planned = await get_latest_task_occurrence_planned_at(task.id)
@@ -417,7 +423,9 @@ class SchedulerService:
                 hour, minute = map(int, task.local_time.split(":"))
                 days_str = ",".join(str(d) for d in task.days_of_week)
                 tz = ZoneInfo(task.timezone)
-                trigger = CronTrigger(hour=hour, minute=minute, day_of_week=days_str, timezone=tz)
+                trigger = CronTrigger(
+                    hour=hour, minute=minute, day_of_week=days_str, timezone=tz, end_date=task_end_utc(task)
+                )
 
                 curr = boundary_utc.astimezone(tz)
                 while True:
@@ -435,15 +443,21 @@ class SchedulerService:
             # 3. Handle pending occurrences for this active task
             pending_occurrences = await list_pending_task_occurrences(task.id)
             newly_missed_count = 0
+            future_pending = 0
 
             for occ in pending_occurrences:
                 occ_due_at = _ensure_utc(occ.due_at)
                 if occ_due_at > now:
                     self.schedule_task_occurrence(occ)
+                    future_pending += 1
                 else:
                     newly_missed = await mark_task_occurrence_missed(occ.id, now)
                     if newly_missed:
                         newly_missed_count += 1
+
+            # A finished course with nothing left to deliver becomes inactive
+            if ended and future_pending == 0:
+                await deactivate_scheduled_task(task.id, task.user_id, task.chat_id)
 
             # 4. Send missed summary if any occurrences were newly marked missed
             if newly_missed_count > 0:

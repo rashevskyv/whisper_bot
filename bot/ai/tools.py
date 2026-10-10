@@ -9,11 +9,18 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 
 from bot.utils.date_helper import calculate_future_date, calculate_future_date_details
 from bot.utils.scheduler import scheduler_service
-from bot.utils.scheduled_tasks import create_scheduled_tasks_batch
+from bot.utils.scheduled_tasks import (
+    create_scheduled_tasks_batch,
+    deactivate_scheduled_task,
+    get_scheduled_task,
+    list_active_scheduled_tasks,
+    task_has_ended,
+)
 from bot.utils.search import perform_search, extract_source_links
 from bot.utils.action_drafts import (
     create_action_draft,
     get_action_draft,
+    get_active_action_draft,
     update_action_draft_information,
     DRAFT_STATUS_AWAITING_INFO,
     DRAFT_STATUS_PENDING_CONFIRMATION,
@@ -76,10 +83,18 @@ SCHEDULE_REMINDER_SCHEMA: Dict[str, Any] = {
 
 DELETE_REMINDER_SCHEMA: Dict[str, Any] = {
     "name": "delete_reminder",
-    "description": "Delete a reminder by ID. Call this tool even if the ID is missing, as the application manages clarification.",
+    "description": (
+        "Delete a one-time reminder (reminder_id) or a recurring medication/task schedule "
+        "(scheduled_task_id). Match the user's words to the Active Reminders and Recurring "
+        "Schedules lists in the metadata and pass the matching ID. "
+        "Call this tool even if the ID is missing, as the application manages clarification."
+    ),
     "parameters": {
         "type": "object",
-        "properties": {"reminder_id": {"type": "integer"}},
+        "properties": {
+            "reminder_id": {"type": "integer", "description": "ID of a one-time reminder."},
+            "scheduled_task_id": {"type": "integer", "description": "ID of a recurring schedule."},
+        },
         "required": []
     }
 }
@@ -106,6 +121,9 @@ CREATE_SCHEDULED_TASKS_SCHEMA: Dict[str, Any] = {
         "relative_to='сніданок', offset_minutes=120, and omit reference_time if the user "
         "has not supplied breakfast time. "
         "days_of_week describes the days on which the concrete task or reference event occurs. "
+        "For 'N times a day' without explicit times, spread doses over waking hours "
+        "(about 08:00-22:00), never at night unless the user asks. "
+        "For a limited course ('only today', 'for 5 days', 'until Friday') set end_date. "
         "Call the tool even when information is incomplete; the application owns clarification."
     ),
     "parameters": {
@@ -144,6 +162,13 @@ CREATE_SCHEDULED_TASKS_SCHEMA: Dict[str, Any] = {
                             "items": {
                                 "type": "integer"
                             }
+                        },
+                        "end_date": {
+                            "type": "string",
+                            "description": (
+                                "Last local date of a limited course, YYYY-MM-DD, inclusive. "
+                                "For 'only today' use today's local date. Omit for open-ended schedules."
+                            )
                         },
                         "relative_to": {
                             "type": "string",
@@ -397,6 +422,28 @@ def _parse_days_reply(text: str) -> Optional[List[int]]:
     return sorted(days) if days else None
 
 
+def _parse_iso_date(val: Any) -> Optional[datetime.date]:
+    if not isinstance(val, str):
+        return None
+    try:
+        return datetime.date.fromisoformat(val.strip())
+    except ValueError:
+        return None
+
+
+def _has_invalid_end_date(raw_items: Any, timezone_name: str) -> bool:
+    """True when an item gives end_date that is not YYYY-MM-DD or is before today's local date."""
+    today = datetime.datetime.now(zoneinfo.ZoneInfo(timezone_name)).date()
+    for it in raw_items if isinstance(raw_items, list) else []:
+        raw = it.get("end_date") if isinstance(it, dict) else None
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue
+        end = _parse_iso_date(raw)
+        if end is None or end < today:
+            return True
+    return False
+
+
 def _normalize_create_scheduled_tasks_payload(
     raw_payload: Dict[str, Any],
     trusted_timezone: Optional[str] = None,
@@ -465,10 +512,13 @@ def _normalize_create_scheduled_tasks_payload(
             resolved_local_time = local_time
             resolved_days_of_week = days
 
+        end_date = _parse_iso_date(it.get("end_date"))
+
         normalized_items.append({
             "name": name,
             "details": details,
             "dosage": dosage,
+            "end_date": end_date.isoformat() if end_date else None,
             "days_of_week": days,
             "local_time": local_time,
             "relative_to": relative_to,
@@ -538,8 +588,61 @@ class ToolResult:
 # --- 3. Active Reminders Summary for Clock Metadata ---
 
 async def get_active_reminders_summary(chat_id: int, timezone_name: str) -> str:
-    """Повертає форматований рядок активних нагадувань для метаданих годинника."""
-    return await scheduler_service.get_active_reminders_string(chat_id, timezone_name)
+    """Повертає форматований рядок активних нагадувань і розкладів для метаданих годинника."""
+    text = await scheduler_service.get_active_reminders_string(chat_id, timezone_name)
+    try:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        tasks = [t for t in await list_active_scheduled_tasks(chat_id=chat_id) if not task_has_ended(t, now)]
+    except Exception:
+        logger.error(f"Failed to list recurring schedules for AI metadata: chat_id={chat_id}")
+        tasks = []
+    if tasks:
+        ukr_days = {0: "Пн", 1: "Вт", 2: "Ср", 3: "Чт", 4: "Пт", 5: "Сб", 6: "Нд"}
+        text += "\nRecurring Schedules (delete with delete_reminder scheduled_task_id):\n"
+        for t in tasks:
+            days = ", ".join(ukr_days.get(d, str(d)) for d in t.days_of_week)
+            dosage = f" | Dosage: '{t.dosage}'" if t.dosage else ""
+            until = f" | Until: {t.end_date}" if t.end_date else ""
+            text += f"- Schedule ID: {t.id} | {days} {t.local_time} | Name: '{t.name}'{dosage}{until}\n"
+    return text
+
+
+async def get_active_draft_context(user_id: Optional[int], chat_id: Optional[int]) -> Optional[str]:
+    """Описує активну чернетку дії для AI, щоб він міг дозаповнити або виправити її."""
+    if not user_id or not chat_id:
+        return None
+    draft = await get_active_action_draft(user_id, chat_id)
+    if not draft:
+        return None
+    return (
+        f"[ACTIVE ACTION DRAFT] The user has an unfinished '{draft.action_type}' action "
+        f"(status: {draft.status}). Current arguments: "
+        f"{json.dumps(draft.payload, ensure_ascii=False)}. Still missing: {list(draft.missing_fields or [])}. "
+        f"If the user's message answers, corrects or changes this action, call {draft.action_type} again "
+        f"with the COMPLETE corrected arguments; the new call replaces this draft. "
+        f"Use only values the user actually stated. Never store complaints, questions or remarks as field values. "
+        f"If the user asks something else (for example, a list of reminders), answer it and say which value is still needed."
+    )
+
+
+# Free-text fields accept any text, so a literal slot-fill stores remarks as values. The AI fills them instead.
+AI_DRAFT_FIELDS: Set[str] = {"text", "item_name", "item_dosage", "items"}
+# Parse failures of structured fields: the reply is not an answer, so the AI handles it.
+AI_FALLBACK_ERRORS: Set[str] = {
+    "invalid_future_datetime",
+    "invalid_reminder_id",
+    "invalid_context_type",
+    "invalid_item_days",
+    "invalid_item_time",
+    "invalid_reference_time",
+    "invalid_item_id",
+    "invalid_state",
+}
+
+
+def draft_field_needs_ai(draft: Any) -> bool:
+    fields = list(getattr(draft, "missing_fields", None) or [])
+    return bool(fields) and fields[0].split(":")[0] in AI_DRAFT_FIELDS
 
 
 def format_draft_preview_or_question(
@@ -612,10 +715,14 @@ def format_draft_preview_or_question(
         if missing_fields:
             return "❓ Яке саме нагадування ви хочете видалити? Вкажіть його номер."
 
-        rem_id = payload.get("reminder_id")
+        if payload.get("scheduled_task_id"):
+            safe_name = html.escape(str(payload.get("name") or ""))
+            target = f"Розклад #{payload['scheduled_task_id']} «{safe_name}» (усі майбутні нагадування)"
+        else:
+            target = f"Нагадування #{payload.get('reminder_id')}"
         return (
             f"\n🗑 <b>Підтвердження видалення:</b>\n"
-            f"Нагадування #{rem_id}\n\n"
+            f"{target}\n\n"
             f"⚠️ <i>Потрібне підтвердження для видалення.</i>"
         )
 
@@ -742,6 +849,9 @@ def format_draft_preview_or_question(
             else:
                 lines.append(f"  🕒 Час: {res_time}")
                 lines.append(f"  📅 Дні: {res_days_str}")
+            end_date = _parse_iso_date(it.get("end_date"))
+            if end_date:
+                lines.append(f"  🏁 До: {end_date.strftime('%d.%m.%Y')} включно")
             lines.append("")
 
         lines.append("ℹ️ <i>Бот лише структурує вказану вами інструкцію та не обирає ліки чи дозування.</i>")
@@ -1154,6 +1264,17 @@ async def execute_tool(
                 stop=False
             )
 
+        task_id = _clean_item_id(args.get("scheduled_task_id"))
+
+        if execute_mutation and task_id is not None:
+            if not user_id:
+                return ToolResult(payload={"success": False, "error": "user_id is required"}, stop=False)
+            task = await deactivate_scheduled_task(task_id, user_id, chat_id)
+            if task is None:
+                return ToolResult(payload={"success": False, "error": "not_found"}, stop=False)
+            scheduler_service.unschedule_recurring_task(task_id)
+            return ToolResult(payload={"success": True}, stop=False)
+
         if execute_mutation:
             # Trusted direct execution branch (reserved for confirmed draft callback)
             raw_rem_id = args.get("reminder_id")
@@ -1190,6 +1311,39 @@ async def execute_tool(
             return ToolResult(
                 payload={"success": False, "error": "user_id is required"},
                 stop=False
+            )
+
+        if task_id is not None:
+            task = await get_scheduled_task(task_id, user_id, chat_id)
+            if task is None or not task.active:
+                return ToolResult(
+                    payload={"success": False, "error": "scheduled_task_not_found"},
+                    stop=False
+                )
+            draft = await create_action_draft(
+                user_id=user_id,
+                chat_id=chat_id,
+                action_type="delete_reminder",
+                payload={"scheduled_task_id": task_id, "name": task.name},
+                missing_fields=[],
+                source_message_id=source_message_id,
+            )
+            return ToolResult(
+                payload={
+                    "success": True,
+                    "draft_id": draft.id,
+                    "action_type": "delete_reminder",
+                    "status": draft.status,
+                    "missing_fields": [],
+                },
+                display_text=format_draft_preview_or_question(
+                    action_type="delete_reminder",
+                    payload=draft.payload,
+                    missing_fields=[],
+                    timezone_name=tz_str,
+                ),
+                stop=True,
+                draft_id=draft.id,
             )
 
         raw_rem_id = args.get("reminder_id")
@@ -1344,6 +1498,15 @@ async def execute_tool(
 
         # Default draft interception mode (execute_mutation=False)
         clean_payload, missing_fields = _normalize_create_scheduled_tasks_payload(args, tz_str)
+        if _has_invalid_end_date(args.get("items"), clean_payload["timezone"]):
+            return ToolResult(
+                payload={
+                    "success": False,
+                    "error": "invalid_end_date",
+                    "hint": "end_date must be YYYY-MM-DD and not before today's local date",
+                },
+                stop=False
+            )
 
         draft = await create_action_draft(
             user_id=user_id,

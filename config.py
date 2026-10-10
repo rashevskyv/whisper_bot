@@ -11,7 +11,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 _raw_bot_timezone = (os.getenv("BOT_TIMEZONE") or "Europe/Kyiv").strip()
 BOT_TIMEZONE = "Europe/Kyiv" if _raw_bot_timezone == "Europe/Kiev" else _raw_bot_timezone
-APP_VERSION = "2.5.4"
+APP_VERSION = "2.5.5"
 
 ENABLE_VIDEO_REPOST = os.getenv("ENABLE_VIDEO_REPOST", "true").lower() in ("true", "1", "yes")
 ENABLE_VIDEO_REPOST_GROUPS = os.getenv("ENABLE_VIDEO_REPOST_GROUPS", "true").lower() in ("true", "1", "yes")
